@@ -1,0 +1,11 @@
+customer_id,full_name,email,phone_number,age,status,updated_at
+C001,Nguyen An,an.nguyen@example.com,0912345678,29,ACTIVE,2026-06-24T08:00:00Z
+C002,Tran Binh,binh.tran@example.com,0912345679,41,ACTIVE,2026-06-24T08:03:00Z
+C003,Le Chi,chi.le@example.com,0912345680,35,INACTIVE,2026-06-24T08:10:00Z
+C004,Pham Dung,dung.pham@example.com,0912345681,27,ACTIVE,2026-06-24T08:15:00Z
+C005,Hoang Em,bad-email,0912345682,abc,ACTIVE,2026-06-24T08:20:00Z
+C006,Do Giang,giang.do@example.com,,53,ACTIVE,2026-06-24T08:25:00Z
+C007,Vo Hanh,hanh.vo@example.com,0912345684,32,INACTIVE,2026-06-24T08:30:00Z
+C008,Bui Khoa,khoa.bui@example.com,0912345685,38,ACTIVE,2026-06-24T08:35:00Z
+C009,Dang Lam,lam.dang@example.com,0912345686,45,ACTIVE,2026-06-24T08:40:00Z
+C010,Mai Minh,minh.mai@example.com,0912345687,22,ACTIVE,2026-06-24T08:45:00Z

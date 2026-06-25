@@ -1,0 +1,63 @@
+dataset_id: customer_master
+dataset_name: Customer Master
+dataset_type: master_data
+source_type: csv
+storage_path: data/samples/customer_master.csv
+
+declared_schema:
+  customer_id:
+    data_type: string
+    nullable: false
+  full_name:
+    data_type: string
+    nullable: false
+  email:
+    data_type: string
+    nullable: false
+  phone_number:
+    data_type: string
+    nullable: false
+  age:
+    data_type: integer
+    nullable: true
+  status:
+    data_type: string
+    nullable: false
+  updated_at:
+    data_type: datetime
+    nullable: false
+
+primary_key:
+  - customer_id
+
+mandatory_fields:
+  - customer_id
+  - full_name
+  - email
+  - phone_number
+
+cde_fields:
+  - customer_id
+  - email
+  - phone_number
+  - status
+
+timestamp_column: updated_at
+freshness_time_basis: updated_at
+
+sla_config:
+  expected_frequency: daily
+  max_freshness_lag_hours: 24
+
+profiling_config:
+  execution_mode: gx_pandas
+  sampling_method: full_scan
+  random_seed: 42
+  enable_pattern_detection: true
+  enable_candidate_rule_generation: true
+  enable_basic_anomaly_detection: true
+  thresholds:
+    not_null_max_null_ratio: 0.05
+    unique_min_ratio: 0.95
+    pattern_min_ratio: 0.8
+    volume_deviation: 0.3
