@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 data/profile_store/*.db
 data/profile_store/*.json
+temp

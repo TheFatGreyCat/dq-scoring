@@ -1,0 +1,93 @@
+dataset_id: amazon_products
+dataset_name: Amazon Products
+dataset_type: product_catalog
+source_type: csv
+storage_path: data/samples/amazon.csv
+
+declared_schema:
+  product_id:
+    data_type: string
+    nullable: false
+  product_name:
+    data_type: string
+    nullable: false
+  category:
+    data_type: string
+    nullable: false
+  discounted_price:
+    data_type: string
+    nullable: false
+  actual_price:
+    data_type: string
+    nullable: false
+  discount_percentage:
+    data_type: string
+    nullable: false
+  rating:
+    data_type: numeric
+    nullable: false
+  rating_count:
+    data_type: string
+    nullable: true
+  about_product:
+    data_type: string
+    nullable: false
+  user_id:
+    data_type: string
+    nullable: false
+  user_name:
+    data_type: string
+    nullable: false
+  review_id:
+    data_type: string
+    nullable: false
+  review_title:
+    data_type: string
+    nullable: false
+  review_content:
+    data_type: string
+    nullable: false
+  img_link:
+    data_type: string
+    nullable: false
+  product_link:
+    data_type: string
+    nullable: false
+
+business_key:
+  - product_id
+
+mandatory_fields:
+  - product_id
+  - product_name
+  - category
+  - discounted_price
+  - actual_price
+  - rating
+  - product_link
+
+cde_fields:
+  - product_id
+  - product_name
+  - category
+  - discounted_price
+  - actual_price
+  - discount_percentage
+  - rating
+  - rating_count
+  - product_link
+
+profiling_config:
+  execution_mode: gx_pandas
+  sampling_method: full_scan
+  random_seed: 42
+  enable_pattern_detection: true
+  enable_candidate_rule_generation: true
+  enable_basic_anomaly_detection: true
+  thresholds:
+    not_null_max_null_ratio: 0.05
+    unique_min_ratio: 0.95
+    pattern_min_ratio: 0.8
+    domain_max_distinct: 50
+    domain_max_uniqueness_ratio: 0.2
+    volume_deviation: 0.3
