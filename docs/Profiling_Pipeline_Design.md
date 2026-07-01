@@ -246,14 +246,14 @@ Pipeline có thể nhận dataset từ nhiều nguồn:
 
 Thông tin tối thiểu cần có:
 
-|Trường|Mô tả|
-|---|---|
-|`dataset_id`|Định danh duy nhất của dataset|
-|`dataset_name`|Tên dataset|
-|`source_type`|Loại nguồn dữ liệu|
-|`storage_path`|Đường dẫn hoặc kết nối đến dữ liệu|
-|`declared_schema`|Schema được khai báo trong metadata|
-|`dataset_type`|Loại dataset: master_data, transaction, log_event, reference_data, default|
+| Trường            | Mô tả                                                                      |
+| ----------------- | -------------------------------------------------------------------------- |
+| `dataset_id`      | Định danh duy nhất của dataset                                             |
+| `dataset_name`    | Tên dataset                                                                |
+| `source_type`     | Loại nguồn dữ liệu                                                         |
+| `storage_path`    | Đường dẫn hoặc kết nối đến dữ liệu                                         |
+| `declared_schema` | Schema được khai báo trong metadata                                        |
+| `dataset_type`    | Loại dataset: master_data, transaction, log_event, reference_data, default |
 
 ### 4.2 Metadata đầu vào
 
@@ -348,13 +348,13 @@ sampled_profile_metric ≠ official_rule_evaluation_result
 
 Schema Profiling so sánh schema khai báo trong metadata với schema thực tế của dataset.
 
-|Kiểm tra|Mô tả|
-|---|---|
-|Schema existence|Dataset có schema khai báo hay không|
-|Column existence|Cột khai báo có tồn tại trong dữ liệu thực tế không|
-|Extra column|Có cột phát sinh ngoài schema khai báo không|
-|Data type mismatch|Kiểu dữ liệu thực tế khác kiểu dữ liệu khai báo|
-|Nullable mismatch|Cột mandatory có nhiều giá trị null bất thường không|
+| Kiểm tra           | Mô tả                                                |
+| ------------------ | ---------------------------------------------------- |
+| Schema existence   | Dataset có schema khai báo hay không                 |
+| Column existence   | Cột khai báo có tồn tại trong dữ liệu thực tế không  |
+| Extra column       | Có cột phát sinh ngoài schema khai báo không         |
+| Data type mismatch | Kiểu dữ liệu thực tế khác kiểu dữ liệu khai báo      |
+| Nullable mismatch  | Cột mandatory có nhiều giá trị null bất thường không |
 
 Kết quả schema profiling hỗ trợ Metadata Check, Validity và Completeness.
 
@@ -653,7 +653,7 @@ Ví dụ ánh xạ:
 
 Lưu ý: Ví dụ dưới đây là Rule Evaluation Result do Rules Engine tạo ra từ rule chính thức. Đây không phải output trực tiếp của Pipeline Profiling.
 
-```json
+```
 {
   "rule_id": "DQ-VALI-EMAIL-001",
   "dataset_id": "customer_master",
@@ -824,7 +824,7 @@ Dashboard Phase 1 nên hiển thị:
 
 ### 13.1 Ví dụ cấu hình dataset
 
-```yaml
+```
 dataset_id: customer_master
 dataset_name: Customer Master
 dataset_type: master_data
@@ -856,7 +856,7 @@ profiling_config:
 
 ### 13.2 Ví dụ Profile Result rút gọn
 
-```json
+```
 {
   "run_id": "RUN_20260624_001",
   "dataset_id": "customer_master",
@@ -909,7 +909,7 @@ profiling_config:
 
 ### 13.3 Ví dụ candidate rule
 
-```json
+```
 {
   "candidate_rule_id": "CAND-VALI-EMAIL-001",
   "dataset_id": "customer_master",
@@ -929,7 +929,7 @@ profiling_config:
 
 ### 13.4 Ví dụ anomaly flag
 
-```json
+```
 {
   "anomaly_id": "ANOM-EMAIL-001",
   "dataset_id": "customer_master",
