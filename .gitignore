@@ -1,8 +1,11 @@
 .venv/
+.agents
 **/.venv/
 node_modules/
 __pycache__/
 *.pyc
 data/profile_store/*.db
 data/profile_store/*.json
+data/rules_store/*.db
+data/rules_store/*.json
 temp
