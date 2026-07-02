@@ -71,11 +71,11 @@ class RulesEngineTests(unittest.TestCase):
 
         email = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-VALI-EMAIL-001"])
         self.assertEqual(email.failed, 1)
-        self.assertEqual(email.total_records_in_scope, 10)
+        self.assertEqual(email.total_records_in_scope, 11)
 
         age_type = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-VALI-AGE-TYPE-001"])
         self.assertEqual(age_type.miscast, 1)
-        self.assertEqual(age_type.passed, 9)
+        self.assertEqual(age_type.passed, 10)
 
         age_range = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-ACCU-AGE-001"])
         self.assertEqual(age_range.miscast, 1)
@@ -83,20 +83,25 @@ class RulesEngineTests(unittest.TestCase):
 
         phone = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-COMP-PHONE-001"])
         self.assertEqual(phone.empty, 1)
-        self.assertEqual(phone.total_records_in_scope, 10)
+        self.assertEqual(phone.total_records_in_scope, 11)
 
         unique = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-UNIQ-CUSTOMER-001"])
-        self.assertEqual(unique.passed, 10)
-        self.assertEqual(unique.total_records_in_scope, 10)
+        self.assertEqual(unique.failed, 2)
+        self.assertEqual(unique.passed, 9)
+        self.assertEqual(unique.total_records_in_scope, 11)
+
+        duplicate_row = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-UNIQ-DUPROW-001"])
+        self.assertEqual(duplicate_row.failed, 2)
+        self.assertEqual(duplicate_row.passed, 9)
 
         status = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-VALI-STATUS-001"])
-        self.assertEqual(status.passed, 10)
+        self.assertEqual(status.passed, 11)
 
         parseable = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-TIME-UPDATED-001"])
-        self.assertEqual(parseable.passed, 10)
+        self.assertEqual(parseable.passed, 11)
 
         not_future = evaluator.evaluate(self.dataframe, self.dataset_config, rules["DQ-TIME-NOT-FUTURE-001"])
-        self.assertEqual(not_future.passed, 10)
+        self.assertEqual(not_future.passed, 11)
 
     def test_null_policy_ignore_marks_empty_values_not_applicable(self) -> None:
         rule = parse_rule_config(
@@ -117,7 +122,7 @@ class RulesEngineTests(unittest.TestCase):
         )
         result = RuleEvaluator().evaluate(self.dataframe, self.dataset_config, rule)
         self.assertEqual(result.not_applicable, 1)
-        self.assertEqual(result.total_records_in_scope, 9)
+        self.assertEqual(result.total_records_in_scope, 10)
 
     def test_run_rules_writes_four_tables_and_no_score_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

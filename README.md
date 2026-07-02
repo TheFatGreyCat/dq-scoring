@@ -1,13 +1,14 @@
-# DQ Scoring - Phase 1 Profiling Pipeline
+# DQ Scoring
+This repository contains the Phase 1 DQ Scoring MVP:
 
-This repository contains the Phase 1 profiling MVP for the DQ Scoring project.
-The profiling pipeline scans datasets, extracts deterministic statistics,
-generates candidate rules, raises basic anomaly flags, and stores normalized
-profile results for downstream Rules Engine, Scoring Engine, Trust Score, and
-Dashboard modules.
+- Profiling scans datasets, extracts deterministic statistics, generates
+  candidate rules, and raises basic anomaly flags.
+- Rules Engine runs active rule configs and produces normalized
+  `Rule Evaluation Result` counts.
+- Scoring Engine consumes Rules Engine output and calculates `RuleScore`,
+  `DimensionScore`, and `DQ Core Score`.
 
-Profiling does not calculate official `RuleScore`, `DimensionScore`,
-`DQ_Core`, or `FinalScore`. Those scores belong to downstream engines.
+Phase 1 does not calculate `TrustScore` or `FinalScore`.
 
 ## Install
 
@@ -27,6 +28,48 @@ Profiling does not calculate official `RuleScore`, `DimensionScore`,
 The CLI prints a summary with `run_id`, status, row/column counts, candidate
 rule count, anomaly flag count, and the SQLite profile store path.
 
+## Run Rules Engine
+
+```powershell
+.\.venv\Scripts\python.exe -m rules_engine.run `
+  --dataset-config data/configs/customer_master.yaml `
+  --rules data/rules/customer_master_rules.yaml `
+  --store data/rules_store/dq_rules.db `
+  --export-json data/rules_store/customer_master_rules.json
+```
+
+The Rules Engine output includes:
+
+- `rule_run`
+- `rule_config`
+- `rule_evaluation_result`
+- `rule_issue_sample`
+
+Rules Engine does not calculate score fields.
+
+## Run DQ Core Scoring
+
+```powershell
+.\.venv\Scripts\python.exe -m scoring.run `
+  --dataset-config data/configs/customer_master.yaml `
+  --rules data/rules/customer_master_rules.yaml `
+  --scoring-config data/scoring/customer_master_scoring.yaml `
+  --rules-store data/rules_store/dq_rules.db `
+  --score-store data/score_store/dq_scores.db `
+  --export-json data/score_store/customer_master_score.json
+```
+
+The Scoring Engine output includes:
+
+- `score_run`
+- `rule_score_history`
+- `dimension_score_history`
+- `dataset_score_history`
+
+The sample `customer_master` dataset intentionally contains common data quality
+issues for the Phase 1 demo: blank phone number, invalid email format, invalid
+age type, duplicate key, and duplicate row.
+
 ## Test
 
 ```powershell
@@ -35,8 +78,7 @@ rule count, anomaly flag count, and the SQLite profile store path.
 
 ## Output Tables
 
-The SQLite profile store creates the five Phase 1 tables from the profiling
-design:
+The SQLite profile store creates:
 
 - `profiling_run`
 - `dataset_profile`
@@ -44,4 +86,19 @@ design:
 - `candidate_rule`
 - `anomaly_flag`
 
-Generated profile store files under `data/profile_store/` are ignored by git.
+The SQLite rules store creates:
+
+- `rule_run`
+- `rule_config`
+- `rule_evaluation_result`
+- `rule_issue_sample`
+
+The SQLite score store creates:
+
+- `score_run`
+- `rule_score_history`
+- `dimension_score_history`
+- `dataset_score_history`
+
+Generated store files under `data/profile_store/`, `data/rules_store/`, and
+`data/score_store/` are ignored by git.

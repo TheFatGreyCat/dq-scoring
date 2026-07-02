@@ -129,6 +129,20 @@ rules:
     status: active
     score_enabled: true
 
+  - rule_id: DQ-UNIQ-DUPROW-001
+    rule_name: Full row duplicate check
+    description: full dataset rows must not be duplicated
+    dataset_id: customer_master
+    dimension: Uniqueness
+    rule_type: full_row_duplicate
+    parameters: {}
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
   - rule_id: DQ-TIME-UPDATED-001
     rule_name: Updated timestamp parse check
     description: updated_at must be parseable as a timestamp

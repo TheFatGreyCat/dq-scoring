@@ -28,7 +28,7 @@ class ProfilingPipelineTests(unittest.TestCase):
         df = load_dataset(config)
         sampled, sampling = sample_dataset(df, config)
         self.assertFalse(sampling.is_sampled)
-        self.assertEqual(len(sampled), 10)
+        self.assertEqual(len(sampled), 11)
 
         schema = profile_schema(sampled, config)
         self.assertEqual(schema.missing_columns, [])
@@ -44,8 +44,8 @@ class ProfilingPipelineTests(unittest.TestCase):
         self.assertEqual(phone.blank_count, 1)
 
         dataset_profile = profile_dataset(sampled, config, run_id="RUN-TEST")
-        self.assertEqual(dataset_profile.row_count, 10)
-        self.assertEqual(dataset_profile.duplicate_row_count, 0)
+        self.assertEqual(dataset_profile.row_count, 11)
+        self.assertEqual(dataset_profile.duplicate_row_count, 1)
         self.assertIsNotNone(dataset_profile.freshness_lag)
 
     def test_random_sampling_is_reproducible(self) -> None:
