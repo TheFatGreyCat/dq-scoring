@@ -40,7 +40,20 @@ The Streamlit app opens with:
 - Score trend by run timestamp.
 - Methodology notes for Phase 1 scoring.
 
-## 4. Expected Demo Checks
+## 4. Add A New Dataset
+
+Use the `Add Dataset` tab in the Streamlit app:
+
+1. Upload a CSV file.
+2. Review the inferred schema and adjust data types if needed.
+3. Select primary key, mandatory fields, CDE fields, and optional timestamp.
+4. Click `Create Dataset Config`.
+
+The app writes dataset, rule, and scoring YAML configs under `data/`, then runs
+the existing scoring pipeline when `Run scoring after creating config` is
+enabled. The dataset appears in the dashboard after the app reruns.
+
+## 5. Expected Demo Checks
 
 After generating demo data for all datasets:
 
@@ -54,7 +67,7 @@ After generating demo data for all datasets:
   domains, uniqueness, non-negative numeric values, and total amount
   consistency.
 
-## 5. Run Tests
+## 6. Run Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

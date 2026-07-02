@@ -90,8 +90,22 @@ The dashboard reads the default SQLite stores:
 - `data/score_store/dq_scores.db`
 
 It shows the latest DQ Core Score per dataset, dimension scores, rule
-breakdown, issue samples, and run history trend. See
-`docs/Dashboard_Design.md` and `docs/Demo_Guide.md` for details.
+breakdown, issue samples, and run history trend. See `docs/Demo_Guide.md` for
+details.
+
+### Add A Dataset From The Dashboard
+
+Open the `Add Dataset` tab in Streamlit to upload a CSV file, review inferred
+schema, select keys and mandatory fields, generate YAML configs, and run scoring
+for the new dataset. The generated artifacts are written to:
+
+- `data/samples/<dataset_id>.csv`
+- `data/configs/<dataset_id>.yaml`
+- `data/rules/<dataset_id>_rules.yaml`
+- `data/scoring/<dataset_id>_scoring.yaml`
+
+See `docs/Dataset_Onboarding_Design.md` for implementation details and
+boundaries.
 
 ## Test
 
