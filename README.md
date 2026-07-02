@@ -70,6 +70,29 @@ The sample `customer_master` dataset intentionally contains common data quality
 issues for the Phase 1 demo: blank phone number, invalid email format, invalid
 age type, duplicate key, and duplicate row.
 
+## Run Dashboard Demo
+
+Generate multi-dataset demo score history:
+
+```powershell
+.\.venv\Scripts\python.exe dashboard\generate_demo_data.py --datasets all
+```
+
+Start the Streamlit dashboard:
+
+```powershell
+.\.venv\Scripts\streamlit.exe run dashboard\app.py
+```
+
+The dashboard reads the default SQLite stores:
+
+- `data/rules_store/dq_rules.db`
+- `data/score_store/dq_scores.db`
+
+It shows the latest DQ Core Score per dataset, dimension scores, rule
+breakdown, issue samples, and run history trend. See
+`docs/Dashboard_Design.md` and `docs/Demo_Guide.md` for details.
+
 ## Test
 
 ```powershell

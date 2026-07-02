@@ -1,0 +1,362 @@
+rules:
+  - rule_id: DQ-COMP-RETAIL-TRANSACTION-ID-001
+    rule_name: Transaction ID must not be blank
+    description: transaction_id must contain a value
+    dataset_id: retail_sales_dataset
+    target_column: transaction_id
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: critical
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-RETAIL-DATE-001
+    rule_name: Date must not be blank
+    description: date must contain a value
+    dataset_id: retail_sales_dataset
+    target_column: date
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-RETAIL-CUSTOMER-ID-001
+    rule_name: Customer ID must not be blank
+    description: customer_id must contain a value
+    dataset_id: retail_sales_dataset
+    target_column: customer_id
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-RETAIL-PRODUCT-CATEGORY-001
+    rule_name: Product category must not be blank
+    description: product_category must contain a value
+    dataset_id: retail_sales_dataset
+    target_column: product_category
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-RETAIL-QUANTITY-001
+    rule_name: Quantity must not be blank
+    description: quantity must contain a value
+    dataset_id: retail_sales_dataset
+    target_column: quantity
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-RETAIL-PRICE-PER-UNIT-001
+    rule_name: Price per unit must not be blank
+    description: price_per_unit must contain a value
+    dataset_id: retail_sales_dataset
+    target_column: price_per_unit
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-RETAIL-TOTAL-AMOUNT-001
+    rule_name: Total amount must not be blank
+    description: total_amount must contain a value
+    dataset_id: retail_sales_dataset
+    target_column: total_amount
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-RETAIL-DATE-PARSE-001
+    rule_name: Date must be parseable
+    description: date must parse as a valid date
+    dataset_id: retail_sales_dataset
+    target_column: date
+    dimension: Validity
+    rule_type: date_parseable
+    parameters: {}
+    null_policy: ignore
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-RETAIL-AGE-TYPE-001
+    rule_name: Age must be numeric
+    description: age must parse as a numeric value
+    dataset_id: retail_sales_dataset
+    target_column: age
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-RETAIL-QUANTITY-TYPE-001
+    rule_name: Quantity must be numeric
+    description: quantity must parse as a numeric value
+    dataset_id: retail_sales_dataset
+    target_column: quantity
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-RETAIL-PRICE-TYPE-001
+    rule_name: Price per unit must be numeric
+    description: price_per_unit must parse as a numeric value
+    dataset_id: retail_sales_dataset
+    target_column: price_per_unit
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-RETAIL-TOTAL-AMOUNT-TYPE-001
+    rule_name: Total amount must be numeric
+    description: total_amount must parse as a numeric value
+    dataset_id: retail_sales_dataset
+    target_column: total_amount
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-RETAIL-GENDER-DOMAIN-001
+    rule_name: Gender must be in supported domain
+    description: gender must be Male or Female
+    dataset_id: retail_sales_dataset
+    target_column: gender
+    dimension: Validity
+    rule_type: domain
+    parameters:
+      values:
+        - Male
+        - Female
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-RETAIL-CATEGORY-DOMAIN-001
+    rule_name: Product category must be in supported domain
+    description: product_category must be Beauty, Clothing, or Electronics
+    dataset_id: retail_sales_dataset
+    target_column: product_category
+    dimension: Validity
+    rule_type: domain
+    parameters:
+      values:
+        - Beauty
+        - Clothing
+        - Electronics
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-TIME-RETAIL-DATE-NOT-FUTURE-001
+    rule_name: Date must not be future dated
+    description: date must not be greater than the current time
+    dataset_id: retail_sales_dataset
+    target_column: date
+    dimension: Timeliness
+    rule_type: not_future
+    parameters: {}
+    null_policy: ignore
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-UNIQ-RETAIL-TRANSACTION-ID-001
+    rule_name: Transaction ID uniqueness check
+    description: transaction_id should uniquely identify sales transactions
+    dataset_id: retail_sales_dataset
+    target_column: transaction_id
+    dimension: Uniqueness
+    rule_type: uniqueness
+    parameters:
+      key_columns:
+        - transaction_id
+    null_policy: ignore
+    threshold: 99
+    severity: critical
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-UNIQ-RETAIL-DUPROW-001
+    rule_name: Full row duplicate check
+    description: full sales rows should not be duplicated
+    dataset_id: retail_sales_dataset
+    dimension: Uniqueness
+    rule_type: full_row_duplicate
+    parameters: {}
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-ACCU-RETAIL-AGE-RANGE-001
+    rule_name: Age must be between 0 and 120
+    description: age must fall within a plausible customer age range
+    dataset_id: retail_sales_dataset
+    target_column: age
+    dimension: Accuracy Proxy
+    rule_type: plausibility_range
+    parameters:
+      min_value: 0
+      max_value: 120
+      value_format: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-ACCU-RETAIL-QUANTITY-NONNEGATIVE-001
+    rule_name: Quantity must be non-negative
+    description: quantity must be greater than or equal to zero
+    dataset_id: retail_sales_dataset
+    target_column: quantity
+    dimension: Accuracy Proxy
+    rule_type: plausibility_range
+    parameters:
+      min_value: 0
+      value_format: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-ACCU-RETAIL-PRICE-NONNEGATIVE-001
+    rule_name: Price per unit must be non-negative
+    description: price_per_unit must be greater than or equal to zero
+    dataset_id: retail_sales_dataset
+    target_column: price_per_unit
+    dimension: Accuracy Proxy
+    rule_type: plausibility_range
+    parameters:
+      min_value: 0
+      value_format: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-ACCU-RETAIL-TOTAL-AMOUNT-NONNEGATIVE-001
+    rule_name: Total amount must be non-negative
+    description: total_amount must be greater than or equal to zero
+    dataset_id: retail_sales_dataset
+    target_column: total_amount
+    dimension: Accuracy Proxy
+    rule_type: plausibility_range
+    parameters:
+      min_value: 0
+      value_format: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-CONS-RETAIL-TOTAL-AMOUNT-001
+    rule_name: Total amount must match quantity times price
+    description: total_amount must equal quantity multiplied by price_per_unit
+    dataset_id: retail_sales_dataset
+    dimension: Consistency
+    rule_type: comparison
+    parameters:
+      left_column: total_amount
+      right_expression:
+        operator: multiply
+        columns:
+          - quantity
+          - price_per_unit
+      operator: eq
+      tolerance: 0
+      left_value_format: numeric
+      value_formats:
+        quantity: numeric
+        price_per_unit: numeric
+    null_policy: ignore
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
