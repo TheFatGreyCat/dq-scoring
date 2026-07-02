@@ -1,0 +1,118 @@
+dataset_id: bank_transaction_fraud_detection
+dataset_name: Bank Transaction Fraud Detection
+dataset_type: default
+source_type: csv
+storage_path: data/samples/bank_transaction_fraud_detection.csv
+declared_schema:
+  Customer_ID:
+    data_type: string
+    nullable: false
+  Customer_Name:
+    data_type: string
+    nullable: false
+  Gender:
+    data_type: string
+    nullable: false
+  Age:
+    data_type: integer
+    nullable: false
+  State:
+    data_type: string
+    nullable: false
+  City:
+    data_type: string
+    nullable: false
+  Bank_Branch:
+    data_type: string
+    nullable: false
+  Account_Type:
+    data_type: string
+    nullable: false
+  Transaction_ID:
+    data_type: string
+    nullable: false
+  Transaction_Date:
+    data_type: datetime
+    nullable: false
+  Transaction_Time:
+    data_type: string
+    nullable: false
+  Transaction_Amount:
+    data_type: numeric
+    nullable: false
+  Merchant_ID:
+    data_type: string
+    nullable: false
+  Transaction_Type:
+    data_type: string
+    nullable: false
+  Merchant_Category:
+    data_type: string
+    nullable: false
+  Account_Balance:
+    data_type: numeric
+    nullable: false
+  Transaction_Device:
+    data_type: string
+    nullable: false
+  Transaction_Location:
+    data_type: string
+    nullable: false
+  Device_Type:
+    data_type: string
+    nullable: false
+  Is_Fraud:
+    data_type: integer
+    nullable: false
+  Transaction_Currency:
+    data_type: string
+    nullable: false
+  Customer_Contact:
+    data_type: integer
+    nullable: false
+  Transaction_Description:
+    data_type: string
+    nullable: false
+  Customer_Email:
+    data_type: string
+    nullable: false
+mandatory_fields:
+- Customer_ID
+- Customer_Name
+- Gender
+- Age
+- State
+- City
+- Bank_Branch
+- Account_Type
+- Transaction_ID
+- Transaction_Date
+cde_fields:
+- Customer_ID
+- Transaction_ID
+- Transaction_Date
+- Transaction_Amount
+- Merchant_ID
+- Customer_Email
+- Customer_Name
+- Gender
+- Age
+- State
+- City
+- Bank_Branch
+profiling_config:
+  execution_mode: gx_pandas
+  sampling_method: full_scan
+  random_seed: 42
+  enable_pattern_detection: true
+  enable_candidate_rule_generation: true
+  enable_basic_anomaly_detection: true
+  thresholds:
+    not_null_max_null_ratio: 0.05
+    unique_min_ratio: 0.95
+    pattern_min_ratio: 0.8
+    domain_max_distinct: 50
+    domain_max_uniqueness_ratio: 0.2
+    volume_deviation: 0.3
+primary_key:
+- Customer_ID

@@ -1,0 +1,190 @@
+rules:
+  - rule_id: DQ-COMP-CUSTOMER-001
+    rule_name: Customer ID must not be blank
+    description: customer_id must contain a value
+    dataset_id: customer_master
+    target_column: customer_id
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: critical
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-PHONE-001
+    rule_name: Phone number must not be blank
+    description: phone_number must contain a value
+    dataset_id: customer_master
+    target_column: phone_number
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 95
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-EMAIL-001
+    rule_name: Email format check
+    description: email must match the configured email regex
+    dataset_id: customer_master
+    target_column: email
+    dimension: Validity
+    rule_type: regex
+    parameters:
+      pattern: "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+    null_policy: ignore
+    threshold: 98
+    severity: high
+    execution_backend: gx
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-PHONE-001
+    rule_name: Phone number length check
+    description: phone_number must have exactly 10 characters when present
+    dataset_id: customer_master
+    target_column: phone_number
+    dimension: Validity
+    rule_type: length
+    parameters:
+      exact_length: 10
+    null_policy: ignore
+    threshold: 98
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-STATUS-001
+    rule_name: Customer status domain check
+    description: status must be ACTIVE or INACTIVE
+    dataset_id: customer_master
+    target_column: status
+    dimension: Validity
+    rule_type: domain
+    parameters:
+      values:
+        - ACTIVE
+        - INACTIVE
+    null_policy: fail
+    threshold: 98
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-AGE-TYPE-001
+    rule_name: Age type check
+    description: age must be numeric when present
+    dataset_id: customer_master
+    target_column: age
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: numeric
+    null_policy: ignore
+    threshold: 98
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-ACCU-AGE-001
+    rule_name: Age plausibility check
+    description: age must be between 0 and 120 when present
+    dataset_id: customer_master
+    target_column: age
+    dimension: Accuracy Proxy
+    rule_type: plausibility_range
+    parameters:
+      min_value: 0
+      max_value: 120
+    null_policy: ignore
+    threshold: 95
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-UNIQ-CUSTOMER-001
+    rule_name: Customer ID uniqueness check
+    description: customer_id must be unique when present
+    dataset_id: customer_master
+    target_column: customer_id
+    dimension: Uniqueness
+    rule_type: uniqueness
+    parameters:
+      key_columns:
+        - customer_id
+    null_policy: ignore
+    threshold: 99
+    severity: critical
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-UNIQ-DUPROW-001
+    rule_name: Full row duplicate check
+    description: full dataset rows must not be duplicated
+    dataset_id: customer_master
+    dimension: Uniqueness
+    rule_type: full_row_duplicate
+    parameters: {}
+    null_policy: ignore
+    threshold: 99
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-TIME-UPDATED-001
+    rule_name: Updated timestamp parse check
+    description: updated_at must be parseable as a timestamp
+    dataset_id: customer_master
+    target_column: updated_at
+    dimension: Timeliness
+    rule_type: date_parseable
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-TIME-NOT-FUTURE-001
+    rule_name: Updated timestamp must not be future dated
+    description: updated_at must not be greater than the current time
+    dataset_id: customer_master
+    target_column: updated_at
+    dimension: Timeliness
+    rule_type: not_future
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: medium
+    execution_backend: gx_pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-TIME-FRESHNESS-001
+    rule_name: Customer master freshness check
+    description: dataset max updated_at must be within the configured SLA
+    dataset_id: customer_master
+    target_column: updated_at
+    dimension: Timeliness
+    rule_type: freshness
+    parameters:
+      max_freshness_lag_hours: 24
+    null_policy: ignore
+    threshold: 95
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: false

@@ -1,0 +1,13 @@
+dataset_type: product_catalog
+
+dimension_weights:
+  Completeness: 0.20
+  Validity: 0.20
+  Consistency: 0.20
+  Timeliness: 0.10
+  Uniqueness: 0.15
+  Accuracy Proxy: 0.15
+
+warning_margin: 3
+quality_gate_pass_threshold: 80
+quality_gate_warning_threshold: 65

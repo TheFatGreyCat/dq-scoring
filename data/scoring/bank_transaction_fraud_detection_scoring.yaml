@@ -1,0 +1,11 @@
+dataset_type: default
+dimension_weights:
+  Completeness: 0.2
+  Validity: 0.2
+  Consistency: 0.15
+  Timeliness: 0.1
+  Uniqueness: 0.2
+  Accuracy Proxy: 0.15
+warning_margin: 3
+quality_gate_pass_threshold: 80
+quality_gate_warning_threshold: 65

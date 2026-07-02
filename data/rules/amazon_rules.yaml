@@ -1,0 +1,241 @@
+rules:
+  - rule_id: DQ-COMP-AMZ-PRODUCT-ID-001
+    rule_name: Product ID must not be blank
+    description: product_id must contain a value
+    dataset_id: amazon_products
+    target_column: product_id
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 99
+    severity: critical
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-AMZ-PRODUCT-NAME-001
+    rule_name: Product name must not be blank
+    description: product_name must contain a value
+    dataset_id: amazon_products
+    target_column: product_name
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-AMZ-CATEGORY-001
+    rule_name: Category must not be blank
+    description: category must contain a value
+    dataset_id: amazon_products
+    target_column: category
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-AMZ-DISCOUNTED-PRICE-001
+    rule_name: Discounted price must not be blank
+    description: discounted_price must contain a value
+    dataset_id: amazon_products
+    target_column: discounted_price
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-AMZ-ACTUAL-PRICE-001
+    rule_name: Actual price must not be blank
+    description: actual_price must contain a value
+    dataset_id: amazon_products
+    target_column: actual_price
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-AMZ-RATING-001
+    rule_name: Rating must not be blank
+    description: rating must contain a value
+    dataset_id: amazon_products
+    target_column: rating
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-COMP-AMZ-PRODUCT-LINK-001
+    rule_name: Product link must not be blank
+    description: product_link must contain a value
+    dataset_id: amazon_products
+    target_column: product_link
+    dimension: Completeness
+    rule_type: not_blank
+    parameters: {}
+    null_policy: fail
+    threshold: 98
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-AMZ-RATING-TYPE-001
+    rule_name: Rating must be numeric
+    description: rating must parse as a numeric value
+    dataset_id: amazon_products
+    target_column: rating
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: numeric
+    null_policy: ignore
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-AMZ-DISCOUNTED-PRICE-TYPE-001
+    rule_name: Discounted price must parse as currency
+    description: discounted_price must parse as a currency value
+    dataset_id: amazon_products
+    target_column: discounted_price
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: currency
+    null_policy: ignore
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-AMZ-ACTUAL-PRICE-TYPE-001
+    rule_name: Actual price must parse as currency
+    description: actual_price must parse as a currency value
+    dataset_id: amazon_products
+    target_column: actual_price
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: currency
+    null_policy: ignore
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-VALI-AMZ-DISCOUNT-PCT-TYPE-001
+    rule_name: Discount percentage must parse as percentage
+    description: discount_percentage must parse as a percentage value
+    dataset_id: amazon_products
+    target_column: discount_percentage
+    dimension: Validity
+    rule_type: type_check
+    parameters:
+      expected_type: percentage
+    null_policy: ignore
+    threshold: 98
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-ACCU-AMZ-RATING-RANGE-001
+    rule_name: Rating must be between 0 and 5
+    description: rating must fall within the expected review scale
+    dataset_id: amazon_products
+    target_column: rating
+    dimension: Accuracy Proxy
+    rule_type: plausibility_range
+    parameters:
+      min_value: 0
+      max_value: 5
+      value_format: numeric
+    null_policy: ignore
+    threshold: 98
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-ACCU-AMZ-DISCOUNT-PCT-RANGE-001
+    rule_name: Discount percentage must be between 0 and 100
+    description: discount_percentage must fall within a valid percentage range
+    dataset_id: amazon_products
+    target_column: discount_percentage
+    dimension: Accuracy Proxy
+    rule_type: plausibility_range
+    parameters:
+      min_value: 0
+      max_value: 100
+      value_format: percentage
+    null_policy: ignore
+    threshold: 98
+    severity: medium
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-UNIQ-AMZ-PRODUCT-ID-001
+    rule_name: Product ID uniqueness check
+    description: product_id should uniquely identify products
+    dataset_id: amazon_products
+    target_column: product_id
+    dimension: Uniqueness
+    rule_type: uniqueness
+    parameters:
+      key_columns:
+        - product_id
+    null_policy: ignore
+    threshold: 99
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true
+
+  - rule_id: DQ-CONS-AMZ-DISCOUNTED-LTE-ACTUAL-001
+    rule_name: Discounted price must not exceed actual price
+    description: discounted_price must be less than or equal to actual_price
+    dataset_id: amazon_products
+    dimension: Consistency
+    rule_type: comparison
+    parameters:
+      left_column: discounted_price
+      right_column: actual_price
+      operator: lte
+      left_value_format: currency
+      right_value_format: currency
+    null_policy: ignore
+    threshold: 98
+    severity: high
+    execution_backend: pandas
+    status: active
+    score_enabled: true

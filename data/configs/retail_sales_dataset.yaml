@@ -1,0 +1,70 @@
+dataset_id: retail_sales_dataset
+dataset_name: retail_sales_dataset
+dataset_type: product_catalog
+source_type: csv
+storage_path: data/samples/retail_sales_dataset.csv
+
+declared_schema:
+  transaction_id:
+    data_type: string
+    nullable: false
+  date:
+    data_type: string
+    nullable: false
+  customer_id:
+    data_type: string
+    nullable: false
+  gender:
+    data_type: string
+    nullable: false
+  age:
+    data_type: numeric
+    nullable: false
+  product_category:
+    data_type: string
+    nullable: false
+  quantity:
+    data_type: numeric
+    nullable: false
+  price_per_unit:
+    data_type: numeric
+    nullable: true
+  total_amount:
+    data_type: numeric
+    nullable: false
+
+business_key:
+  - transaction_id
+
+mandatory_fields:
+  - transaction_id
+  - date
+  - customer_id
+  - product_category
+  - quantity
+  - price_per_unit
+  - total_amount
+
+cde_fields:
+  - transaction_id
+  - date
+  - customer_id
+  - product_category
+  - quantity
+  - price_per_unit
+  - total_amount
+
+profiling_config:
+  execution_mode: gx_pandas
+  sampling_method: full_scan
+  random_seed: 42
+  enable_pattern_detection: true
+  enable_candidate_rule_generation: true
+  enable_basic_anomaly_detection: true
+  thresholds:
+    not_null_max_null_ratio: 0.05
+    unique_min_ratio: 0.95
+    pattern_min_ratio: 0.8
+    domain_max_distinct: 50
+    domain_max_uniqueness_ratio: 0.2
+    volume_deviation: 0.3

@@ -1,0 +1,308 @@
+rules:
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-CUSTOMER_ID-001
+  rule_name: Customer_ID must contain a value
+  description: Customer_ID must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Customer_ID
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-CUSTOMER_NAME-001
+  rule_name: Customer_Name must contain a value
+  description: Customer_Name must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Customer_Name
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-GENDER-001
+  rule_name: Gender must contain a value
+  description: Gender must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Gender
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-AGE-001
+  rule_name: Age must contain a value
+  description: Age must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Age
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-STATE-001
+  rule_name: State must contain a value
+  description: State must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: State
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-CITY-001
+  rule_name: City must contain a value
+  description: City must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: City
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-BANK_BRANCH-001
+  rule_name: Bank_Branch must contain a value
+  description: Bank_Branch must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Bank_Branch
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-ACCOUNT_TYPE-001
+  rule_name: Account_Type must contain a value
+  description: Account_Type must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Account_Type
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-TRANSACTION_ID-001
+  rule_name: Transaction_ID must contain a value
+  description: Transaction_ID must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Transaction_ID
+- rule_id: DQ-COMP-BANK_TRANSACTION_FRAUD_DETECTION-TRANSACTION_DATE-001
+  rule_name: Transaction_Date must contain a value
+  description: Transaction_Date must contain a value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Completeness
+  rule_type: not_blank
+  parameters: {}
+  null_policy: fail
+  threshold: 99
+  severity: high
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Transaction_Date
+- rule_id: DQ-VALI-BANK_TRANSACTION_FRAUD_DETECTION-AGE_TYPE-001
+  rule_name: Age must parse as integer
+  description: Age must parse as integer
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Validity
+  rule_type: type_check
+  parameters:
+    expected_type: integer
+  null_policy: ignore
+  threshold: 98
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Age
+- rule_id: DQ-ACCU-BANK_TRANSACTION_FRAUD_DETECTION-AGE_RANGE-001
+  rule_name: Age must fall within a plausible range
+  description: Age must fall within a plausible range
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Accuracy Proxy
+  rule_type: plausibility_range
+  parameters:
+    value_format: numeric
+    min_value: 0
+    max_value: 120
+  null_policy: ignore
+  threshold: 95
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Age
+- rule_id: DQ-VALI-BANK_TRANSACTION_FRAUD_DETECTION-TRANSACTION_DATE_DATE-001
+  rule_name: Transaction_Date must parse as a date/time value
+  description: Transaction_Date must parse as a date/time value
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Validity
+  rule_type: date_parseable
+  parameters: {}
+  null_policy: ignore
+  threshold: 98
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Transaction_Date
+- rule_id: DQ-VALI-BANK_TRANSACTION_FRAUD_DETECTION-TRANSACTION_AMOUNT_TYPE-001
+  rule_name: Transaction_Amount must parse as numeric
+  description: Transaction_Amount must parse as numeric
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Validity
+  rule_type: type_check
+  parameters:
+    expected_type: numeric
+  null_policy: ignore
+  threshold: 98
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Transaction_Amount
+- rule_id: DQ-ACCU-BANK_TRANSACTION_FRAUD_DETECTION-TRANSACTION_AMOUNT_RANGE-001
+  rule_name: Transaction_Amount must fall within a plausible range
+  description: Transaction_Amount must fall within a plausible range
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Accuracy Proxy
+  rule_type: plausibility_range
+  parameters:
+    value_format: numeric
+    min_value: 0
+  null_policy: ignore
+  threshold: 95
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Transaction_Amount
+- rule_id: DQ-VALI-BANK_TRANSACTION_FRAUD_DETECTION-ACCOUNT_BALANCE_TYPE-001
+  rule_name: Account_Balance must parse as numeric
+  description: Account_Balance must parse as numeric
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Validity
+  rule_type: type_check
+  parameters:
+    expected_type: numeric
+  null_policy: ignore
+  threshold: 98
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Account_Balance
+- rule_id: DQ-ACCU-BANK_TRANSACTION_FRAUD_DETECTION-ACCOUNT_BALANCE_RANGE-001
+  rule_name: Account_Balance must fall within a plausible range
+  description: Account_Balance must fall within a plausible range
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Accuracy Proxy
+  rule_type: plausibility_range
+  parameters:
+    value_format: numeric
+    min_value: 0
+  null_policy: ignore
+  threshold: 95
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Account_Balance
+- rule_id: DQ-VALI-BANK_TRANSACTION_FRAUD_DETECTION-IS_FRAUD_TYPE-001
+  rule_name: Is_Fraud must parse as integer
+  description: Is_Fraud must parse as integer
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Validity
+  rule_type: type_check
+  parameters:
+    expected_type: integer
+  null_policy: ignore
+  threshold: 98
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Is_Fraud
+- rule_id: DQ-VALI-BANK_TRANSACTION_FRAUD_DETECTION-CUSTOMER_CONTACT_TYPE-001
+  rule_name: Customer_Contact must parse as integer
+  description: Customer_Contact must parse as integer
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Validity
+  rule_type: type_check
+  parameters:
+    expected_type: integer
+  null_policy: ignore
+  threshold: 98
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Customer_Contact
+- rule_id: DQ-UNIQ-BANK_TRANSACTION_FRAUD_DETECTION-KEY-001
+  rule_name: Configured key columns must be unique
+  description: Configured key columns must be unique
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Uniqueness
+  rule_type: uniqueness
+  parameters:
+    key_columns:
+    - Customer_ID
+  null_policy: ignore
+  threshold: 99
+  severity: critical
+  execution_backend: pandas
+  status: active
+  score_enabled: true
+  target_column: Customer_ID
+- rule_id: DQ-UNIQ-BANK_TRANSACTION_FRAUD_DETECTION-DUPROW-001
+  rule_name: Full dataset rows must not be duplicated
+  description: Full dataset rows must not be duplicated
+  dataset_id: bank_transaction_fraud_detection
+  dimension: Uniqueness
+  rule_type: full_row_duplicate
+  parameters: {}
+  null_policy: ignore
+  threshold: 99
+  severity: medium
+  execution_backend: pandas
+  status: active
+  score_enabled: true
