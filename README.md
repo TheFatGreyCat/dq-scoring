@@ -1,14 +1,20 @@
-# DQ Scoring
-This repository contains the Phase 1 DQ Scoring MVP:
+﻿# DQ Scoring
 
-- Profiling scans datasets, extracts deterministic statistics, generates
-  candidate rules, and raises basic anomaly flags.
-- Rules Engine runs active rule configs and produces normalized
-  `Rule Evaluation Result` counts.
-- Scoring Engine consumes Rules Engine output and calculates `RuleScore`,
-  `DimensionScore`, and `DQ Core Score`.
+DQ Scoring is a PostgreSQL-backed data quality runtime. Streamlit and CLI entrypoints go through `dq_core.runtime` / `dq_core.orchestration`; SQLite stores, per-dataset YAML runtime files, Scoring V1, and legacy pandas validation runners are no longer runtime paths.
 
-Phase 1 does not calculate `TrustScore` or `FinalScore`.
+## Architecture
+
+```text
+Streamlit / CLI
+  -> dq_core.runtime
+  -> PostgreSQL repositories
+  -> Rule Catalog + Dataset Rule Bindings
+  -> GX/Python canonical validation
+  -> Scoring + Quality Gate
+  -> Dashboard / pipeline logs
+```
+
+PostgreSQL stores dataset metadata, profiling results, rule templates, rule bindings, validation runs, canonical measurements, scoring policies, score history, and pipeline logs.
 
 ## Install
 
@@ -16,126 +22,59 @@ Phase 1 does not calculate `TrustScore` or `FinalScore`.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## Run The Sample Pipeline
+## Local PostgreSQL
 
 ```powershell
-.\.venv\Scripts\python.exe -m profiling.run `
-  --config data/configs/customer_master.yaml `
-  --store data/profile_store/dq_profile.db `
-  --export-json data/profile_store/customer_master_profile.json
+docker compose up -d postgres
+$env:DQ_DATABASE_URL='postgresql://dq:dq@localhost:5432/dq_scoring'
+.\.venv\Scripts\python.exe -m persistence.db migrate
 ```
 
-The CLI prints a summary with `run_id`, status, row/column counts, candidate
-rule count, anomaly flag count, and the SQLite profile store path.
-
-## Run Rules Engine
+Seed demo metadata from the legacy sample YAML once:
 
 ```powershell
-.\.venv\Scripts\python.exe -m rules_engine.run `
-  --dataset-config data/configs/customer_master.yaml `
-  --rules data/rules/customer_master_rules.yaml `
-  --store data/rules_store/dq_rules.db `
-  --export-json data/rules_store/customer_master_rules.json
+.\.venv\Scripts\python.exe -m persistence.import_legacy --dry-run
+.\.venv\Scripts\python.exe -m persistence.import_legacy --reset --report backups/import-report/import.json
 ```
 
-The Rules Engine output includes:
+`--dry-run`, `--reset`, `--dataset <id>`, and `--report <path>` are supported. The importer migrates dataset metadata, rule templates, rule bindings, and scoring policies only; V1 profiling, validation, score history, and SQLite artifacts are not migrated.
 
-- `rule_run`
-- `rule_config`
-- `rule_evaluation_result`
-- `rule_issue_sample`
-
-Rules Engine does not calculate score fields.
-
-## Run DQ Core Scoring
+## CLI
 
 ```powershell
-.\.venv\Scripts\python.exe -m scoring.run `
-  --dataset-config data/configs/customer_master.yaml `
-  --rules data/rules/customer_master_rules.yaml `
-  --scoring-config data/scoring/customer_master_scoring.yaml `
-  --rules-store data/rules_store/dq_rules.db `
-  --score-store data/score_store/dq_scores.db `
-  --export-json data/score_store/customer_master_score.json
+.\.venv\Scripts\python.exe -m dq_core.cli register_dataset --csv data/samples/customer_master.csv --dataset-id customer_master --dataset-type customer
+.\.venv\Scripts\python.exe -m dq_core.cli profile_dataset --dataset-version-id DV-customer_master-legacy
+.\.venv\Scripts\python.exe -m dq_core.cli recommend_rules --dataset-version-id DV-customer_master-legacy
+.\.venv\Scripts\python.exe -m dq_core.cli save_recommended_bindings --dataset-version-id DV-customer_master-legacy
+.\.venv\Scripts\python.exe -m dq_core.cli run_validation --dataset-version-id DV-customer_master-legacy
+.\.venv\Scripts\python.exe -m dq_core.cli calculate_score --validation-run-id <validation_run_id>
+.\.venv\Scripts\python.exe -m dq_core.cli get_run_result --score-run-id <score_run_id>
 ```
 
-The Scoring Engine output includes:
-
-- `score_run`
-- `rule_score_history`
-- `dimension_score_history`
-- `dataset_score_history`
-
-The sample `customer_master` dataset intentionally contains common data quality
-issues for the Phase 1 demo: blank phone number, invalid email format, invalid
-age type, duplicate key, and duplicate row.
-
-## Run Dashboard Demo
-
-Generate multi-dataset demo score history:
+## Dashboard
 
 ```powershell
-.\.venv\Scripts\python.exe dashboard\generate_demo_data.py --datasets all
-```
-
-Start the Streamlit dashboard:
-
-```powershell
+$env:DQ_DATABASE_URL='postgresql://dq:dq@localhost:5432/dq_scoring'
 .\.venv\Scripts\streamlit.exe run dashboard\app.py
 ```
 
-The dashboard reads the default SQLite stores:
+The dashboard reads PostgreSQL through the repository layer. Dataset onboarding registers CSV metadata directly into storage and can run profile -> recommend -> bind -> validate -> score in one flow.
 
-- `data/rules_store/dq_rules.db`
-- `data/score_store/dq_scores.db`
-
-It shows the latest DQ Core Score per dataset, dimension scores, rule
-breakdown, issue samples, and run history trend. See `docs/Demo_Guide.md` for
-details.
-
-### Add A Dataset From The Dashboard
-
-Open the `Add Dataset` tab in Streamlit to upload a CSV file, review inferred
-schema, select keys and mandatory fields, generate YAML configs, and run scoring
-for the new dataset. The generated artifacts are written to:
-
-- `data/samples/<dataset_id>.csv`
-- `data/configs/<dataset_id>.yaml`
-- `data/rules/<dataset_id>_rules.yaml`
-- `data/scoring/<dataset_id>_scoring.yaml`
-
-See `docs/Dataset_Onboarding_Design.md` for implementation details and
-boundaries.
-
-## Test
+## Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-## Output Tables
+The test suite covers contract invariants, legacy importer dry-run/idempotency, GX canonical adapters, Scoring behavior, dashboard PostgreSQL row transformation, and an end-to-end runtime slice with a fake repository.
 
-The SQLite profile store creates:
+## Legacy Boundary
 
-- `profiling_run`
-- `dataset_profile`
-- `column_profile`
-- `candidate_rule`
-- `anomaly_flag`
+Legacy CSV samples and YAML files remain as seed/import fixtures. They are not runtime configuration. The removed runtime paths are:
 
-The SQLite rules store creates:
+- SQLite repositories
+- per-dataset YAML service/CLI/dashboard execution
+- Scoring V1 runtime
+- legacy pandas validation CLI runner
 
-- `rule_run`
-- `rule_config`
-- `rule_evaluation_result`
-- `rule_issue_sample`
-
-The SQLite score store creates:
-
-- `score_run`
-- `rule_score_history`
-- `dimension_score_history`
-- `dataset_score_history`
-
-Generated store files under `data/profile_store/`, `data/rules_store/`, and
-`data/score_store/` are ignored by git.
+Use Git history/tag plus `backups/` artifacts for V1 reference and rollback context.

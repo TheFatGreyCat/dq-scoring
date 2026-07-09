@@ -1,4 +1,5 @@
 pandas>=2.0
 great_expectations>=0.18
+psycopg[binary]>=3.2
 PyYAML>=6.0
 streamlit>=1.36

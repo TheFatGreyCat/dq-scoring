@@ -1,4 +1,5 @@
 .venv/
+.env
 .agents
 **/.venv/
 node_modules/
