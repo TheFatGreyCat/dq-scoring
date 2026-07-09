@@ -1,75 +1,47 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
+from unittest.mock import patch
 
-import pandas as pd
+from dashboard.data import aggregate_latest_status_counts, dataset_runs, latest_dataset_scores, load_dashboard_frames, run_details, score_summary_metrics
 
-from dashboard.data import (
-    aggregate_latest_status_counts,
-    dataset_runs,
-    latest_dataset_scores,
-    load_dashboard_frames,
-    run_details,
-    score_summary_metrics,
-)
-from dashboard.generate_demo_data import generate_demo_data
+
+class FakeRepository:
+    def __init__(self, database_url=None):
+        pass
+
+    def list_dashboard_rows(self):
+        return {
+            "dataset": [{"dataset_id": "customer_master", "dataset_name": "Customer", "dataset_type": "customer", "source_type": "csv", "storage_path": "x"}],
+            "dataset_version": [{"dataset_version_id": "DV-1", "dataset_id": "customer_master", "version_label": "v1"}],
+            "validation_run": [{"validation_run_id": "VRUN-1", "dataset_version_id": "DV-1"}],
+            "score_run": [{"score_run_id": "SRUN-1", "validation_run_id": "VRUN-1", "scoring_policy_id": "SP-1", "dataset_version_id": "DV-1", "status": "success", "created_at": "2026-01-01T00:00:00Z"}],
+            "dataset_score_history": [{"score_run_id": "SRUN-1", "dataset_dq_score": 91.5, "quality_gate_status": "pass", "measured_dimensions": ["Completeness"], "excluded_dimensions": []}],
+            "dimension_score_history": [{"score_run_id": "SRUN-1", "dimension": "Completeness", "dimension_score": 91.5, "original_dimension_weight": 1.0, "normalized_dimension_weight": 1.0, "measurement_status": "measured"}],
+            "rule_score_history": [{"score_run_id": "SRUN-1", "binding_id": "BR-1", "dimension": "Completeness", "rule_score": 91.5, "measurement_status": "measured", "quality_status": "pass"}],
+            "dataset_rule_binding": [{"binding_id": "BR-1", "dataset_version_id": "DV-1", "rule_template_id": "RT-1", "target_columns": ["customer_id"], "severity": "high", "backend": "gx", "status": "active", "score_enabled": True}],
+            "rule_template": [{"rule_template_id": "RT-1", "rule_code": "NOT_BLANK", "operator": "not_blank", "dimension": "Completeness", "rule_category": "general"}],
+            "rule_issue_sample": [],
+            "pipeline_log": [],
+        }
 
 
 class DashboardDataTests(unittest.TestCase):
-    def test_latest_scores_details_and_issue_join(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            rules_store = root / "rules.db"
-            score_store = root / "scores.db"
-            export_dir = root / "exports"
+    def test_load_dashboard_frames_from_postgres_rows(self) -> None:
+        with patch("dashboard.data.DqPostgresRepository", FakeRepository):
+            frames = load_dashboard_frames("postgresql://test")
 
-            generate_demo_data(["customer_master", "retail_sales_dataset"], rules_store, score_store, export_dir)
-            generate_demo_data(["customer_master"], rules_store, score_store, export_dir)
+        latest = latest_dataset_scores(frames)
+        self.assertEqual(latest.iloc[0]["dataset_id"], "customer_master")
+        self.assertEqual(aggregate_latest_status_counts(frames), {"pass": 1})
 
-            frames = load_dashboard_frames(score_store, rules_store)
-            latest = latest_dataset_scores(frames)
-            self.assertEqual(set(latest["dataset_id"]), {"customer_master", "retail_sales_dataset"})
-            self.assertEqual(len(latest), 2)
-
-            counts = aggregate_latest_status_counts(frames)
-            self.assertEqual(sum(counts.values()), 2)
-
-            customer_runs = dataset_runs(frames, "customer_master")
-            self.assertEqual(len(customer_runs), 2)
-            details = run_details(frames, str(customer_runs.iloc[0]["run_id"]))
-            metrics = score_summary_metrics(details["dataset_score"])
-            self.assertEqual(metrics["quality_gate_status"], "pass")
-            self.assertGreater(metrics["rules_failed"], 0)
-
-            dimensions = details["dimensions"]
-            consistency = dimensions[dimensions["dimension"] == "Consistency"].iloc[0]
-            self.assertEqual(consistency["measurement_status"], "not_measured")
-            self.assertTrue(pd.isna(consistency["dimension_score"]))
-
-            rules = details["rules"]
-            self.assertIn("rule_name", rules.columns)
-            self.assertIn("severity", rules.columns)
-            self.assertGreater(len(details["issues"]), 0)
-            self.assertIn("rule_name", details["issues"].columns)
-
-    def test_demo_generator_exports_json_for_all_datasets(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            summaries = generate_demo_data(
-                ["all"],
-                root / "rules.db",
-                root / "scores.db",
-                root / "exports",
-            )
-
-            dataset_ids = {summary["dataset_id"] for summary in summaries}
-            self.assertEqual(dataset_ids, {"customer_master", "amazon_products", "retail_sales_dataset"})
-            for summary in summaries:
-                export_path = Path(str(summary["export_json"]))
-                self.assertTrue(export_path.exists())
-                self.assertIsNotNone(summary["dq_core_score"])
+        runs = dataset_runs(frames, "customer_master")
+        self.assertEqual(len(runs), 1)
+        details = run_details(frames, "SRUN-1")
+        metrics = score_summary_metrics(details["dataset_score"])
+        self.assertEqual(metrics["dq_core_score"], 91.5)
+        self.assertEqual(metrics["quality_gate_status"], "pass")
+        self.assertEqual(details["rules"].iloc[0]["rule_name"], "NOT_BLANK")
 
 
 if __name__ == "__main__":

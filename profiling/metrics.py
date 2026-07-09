@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from profiling.models import ColumnProfile, DatasetProfile, iso, utc_now
+
+
+@dataclass(frozen=True)
+class ProfileMetric:
+    run_id: str
+    dataset_id: str
+    column_name: str | None
+    metric_name: str
+    metric_value: Any
+    metric_source: str
+    gx_expectation_type: str | None = None
+    collected_at: str = field(default_factory=lambda: iso(utc_now()) or "")
+
+    def to_record(self) -> dict[str, Any]:
+        return self.__dict__.copy()
+
+
+def build_profile_metrics(dataset_profile: DatasetProfile, column_profiles: list[ColumnProfile]) -> list[ProfileMetric]:
+    metrics: list[ProfileMetric] = [
+        ProfileMetric(dataset_profile.run_id, dataset_profile.dataset_id, None, "row_count", dataset_profile.row_count, "pandas"),
+        ProfileMetric(dataset_profile.run_id, dataset_profile.dataset_id, None, "column_count", dataset_profile.column_count, "pandas"),
+        ProfileMetric(dataset_profile.run_id, dataset_profile.dataset_id, None, "duplicate_row_count", dataset_profile.duplicate_row_count, "pandas"),
+        ProfileMetric(dataset_profile.run_id, dataset_profile.dataset_id, None, "duplicate_row_ratio", dataset_profile.duplicate_row_ratio, "pandas"),
+    ]
+    for profile in column_profiles:
+        metrics.extend(_column_metrics(profile))
+    return metrics
+
+
+def _column_metrics(profile: ColumnProfile) -> list[ProfileMetric]:
+    base = [
+        ("inferred_type", profile.inferred_data_type, "pandas", None),
+        ("null_count", profile.null_count, "pandas", None),
+        ("null_ratio", profile.null_ratio, "pandas", None),
+        ("blank_count", profile.blank_count, "pandas", None),
+        ("distinct_count", profile.distinct_count, "pandas", None),
+        ("distinct_ratio", profile.uniqueness_ratio, "pandas", None),
+        ("min", profile.min_value, "pandas", None),
+        ("max", profile.max_value, "pandas", None),
+        ("mean", profile.mean_value, "pandas", None),
+        ("top_values", profile.top_values, "pandas", None),
+        ("pattern_sample", profile.pattern_frequency, "pandas", None),
+        ("string_length", profile.length_distribution, "pandas", None),
+        ("element_count", profile.null_count + max(profile.distinct_count, 0), "gx", "expect_column_values_to_not_be_null"),
+        ("missing_count", profile.null_count + profile.blank_count, "gx", "expect_column_values_to_not_be_null"),
+        ("missing_percent", profile.null_ratio, "gx", "expect_column_values_to_not_be_null"),
+        ("observed_min", profile.min_value, "gx", "expect_column_min_to_be_between"),
+        ("observed_max", profile.max_value, "gx", "expect_column_max_to_be_between"),
+        ("uniqueness_evidence", {"distinct_count": profile.distinct_count, "uniqueness_ratio": profile.uniqueness_ratio}, "gx", "expect_column_values_to_be_unique"),
+        ("type_conformance", {"inferred_type": profile.inferred_data_type, "miscast_count": profile.miscast_count}, "gx", "expect_column_values_to_be_of_type"),
+    ]
+    return [
+        ProfileMetric(profile.run_id, profile.dataset_id, profile.column_name, name, value, source, expectation)
+        for name, value, source, expectation in base
+    ]
