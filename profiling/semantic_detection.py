@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -46,14 +46,15 @@ def detect_column_semantic(profile: ColumnProfile) -> SemanticDetectionResult:
             confidence = max(confidence, min(0.95, shape_ratio + 0.10))
         candidates.append(("phone", confidence, {"dominant_pattern": dominant_shape, "dominant_pattern_ratio": shape_ratio}))
 
-    if ID_NAME_RE.search(name) or profile.uniqueness_ratio >= 0.95:
+    unique_identifier_like = profile.inferred_data_type not in {"numeric", "integer", "float", "datetime"} and profile.uniqueness_ratio >= 0.95
+    if ID_NAME_RE.search(name) or unique_identifier_like:
         confidence = 0.82 if ID_NAME_RE.search(name) else min(0.90, profile.uniqueness_ratio)
         candidates.append(("identifier", confidence, {"uniqueness_ratio": profile.uniqueness_ratio}))
 
     if AGE_NAME_RE.search(name):
-        candidates.append(("age", 0.90 if profile.inferred_data_type == "numeric" else 0.72, {"inferred_type": profile.inferred_data_type}))
+        candidates.append(("age", 0.90 if profile.inferred_data_type in {"numeric", "integer", "float"} else 0.72, {"inferred_type": profile.inferred_data_type}))
 
-    if AMOUNT_NAME_RE.search(name) and profile.inferred_data_type == "numeric":
+    if AMOUNT_NAME_RE.search(name) and profile.inferred_data_type in {"numeric", "integer", "float", "numeric_string", "integer_like_string"}:
         candidates.append(("amount", 0.86, {"min_value": profile.min_value, "max_value": profile.max_value}))
 
     if DATE_NAME_RE.search(name) or profile.inferred_data_type == "datetime":
@@ -84,3 +85,6 @@ def _phone_shape(pattern: str | None, ratio: float) -> bool:
         return False
     digits = pattern.count("9")
     return 9 <= digits <= 12 and pattern.replace("9", "").strip(" +-().") == ""
+
+
+

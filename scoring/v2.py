@@ -1,10 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from dq_core.models import CanonicalValidationResult, DatasetRuleBinding, RuleTemplate, ScoringPolicy
+
+FORMULA_REVISION = "scoring_v2_coverage_conflict_snapshot"
+ROUNDING_POLICY = "round_6_half_even"
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,12 @@ class RuleScoreV2:
     criticality_weight: float
     effective_weight: float
     explanation: dict[str, object]
+    evaluated_count: int = 0
+    conflict_group: str | None = None
+    primary_scoring_rule: bool = True
+    score_enabled: bool = True
+    measurement_status_reason: str | None = None
+    contribution: float | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +47,13 @@ class DatasetScoreV2:
     measured_dimensions: list[str]
     excluded_dimensions: list[str]
     gate_failures: list[dict[str, object]] = field(default_factory=list)
+    measurement_coverage: float = 0.0
+    measured_dimension_count: int = 0
+    total_dimension_count: int = 0
+    score_status: str = "not_scored"
+    validation_scope: str = "full"
+    formula_revision: str = FORMULA_REVISION
+    policy_snapshot: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -48,6 +64,9 @@ class ScoringV2Result:
     rule_scores: list[RuleScoreV2]
     dimension_scores: list[DimensionScoreV2]
     dataset_score: DatasetScoreV2
+    policy_snapshot: dict[str, object] = field(default_factory=dict)
+    formula_revision: str = FORMULA_REVISION
+    validation_scope: str = "full"
 
 
 def calculate_scores(
@@ -59,6 +78,7 @@ def calculate_scores(
 ) -> ScoringV2Result:
     field_roles_by_column = field_roles_by_column or {}
     summaries = validation.summary_by_measurement_id()
+    policy_snapshot = _policy_snapshot(policy)
     rule_scores: list[RuleScoreV2] = []
     for measurement in validation.measurement_results:
         binding = bindings_by_id[measurement.binding_id]
@@ -71,8 +91,12 @@ def calculate_scores(
         base_weight = template.base_rule_weight
         effective_weight = base_weight * severity_weight * criticality_weight
         quality_status = _rule_quality(score, binding.scoring_pass_threshold, measurement.measurement_status, binding.scoring_method)
+        conflict_group = binding.conflict_group or template.conflict_group
+        score_enabled = binding.score_enabled and not binding.validation_only and not template.validation_only
+        primary_scoring_rule = binding.primary_scoring_rule and template.primary_scoring_rule
         explanation = {
             "base_score": score,
+            "evaluated_count": summary.records_in_scope,
             "base_rule_weight": base_weight,
             "severity_weight": severity_weight,
             "criticality_weight": criticality_weight,
@@ -80,6 +104,9 @@ def calculate_scores(
             "field_roles": sorted(_roles(binding.target_columns, field_roles_by_column)),
             "criticality": criticality,
             "scoring_method": binding.scoring_method,
+            "conflict_group": conflict_group,
+            "score_enabled": score_enabled,
+            "primary_scoring_rule": primary_scoring_rule,
         }
         rule_scores.append(
             RuleScoreV2(
@@ -94,11 +121,18 @@ def calculate_scores(
                 criticality_weight=criticality_weight,
                 effective_weight=round(effective_weight, 6),
                 explanation=explanation,
+                evaluated_count=summary.records_in_scope,
+                conflict_group=conflict_group,
+                primary_scoring_rule=primary_scoring_rule,
+                score_enabled=score_enabled,
+                measurement_status_reason=measurement.measurement_status_reason,
+                contribution=round((score or 0.0) * effective_weight, 6) if score is not None else None,
             )
         )
 
+    rule_scores = _resolve_conflicts(rule_scores)
     dimension_scores = _dimension_scores(rule_scores, bindings_by_id, templates_by_id, policy)
-    dataset_score = _dataset_score(rule_scores, dimension_scores, bindings_by_id, templates_by_id, policy, field_roles_by_column)
+    dataset_score = _dataset_score(rule_scores, dimension_scores, bindings_by_id, templates_by_id, policy, field_roles_by_column, policy_snapshot)
     return ScoringV2Result(
         score_run_id=f"SRUN2-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}",
         validation_run_id=validation.validation_run_id,
@@ -106,7 +140,26 @@ def calculate_scores(
         rule_scores=rule_scores,
         dimension_scores=dimension_scores,
         dataset_score=dataset_score,
+        policy_snapshot=policy_snapshot,
+        formula_revision=FORMULA_REVISION,
+        validation_scope=_validation_scope(validation),
     )
+
+
+def _policy_snapshot(policy: ScoringPolicy) -> dict[str, object]:
+    return {
+        "policy_id": policy.scoring_policy_id,
+        "policy_revision": "current",
+        "dimension_weights": policy.dimension_weights,
+        "severity_weights": policy.severity_weights,
+        "criticality_weights": policy.criticality_weights,
+        "gate_thresholds": {
+            "pass": policy.quality_gate_pass_threshold,
+            "warning": policy.quality_gate_warning_threshold,
+        },
+        "formula_revision": FORMULA_REVISION,
+        "rounding_policy": ROUNDING_POLICY,
+    }
 
 
 def _rule_score(binding: DatasetRuleBinding, observed: dict[str, object], summary) -> float | None:
@@ -141,6 +194,29 @@ def _rule_quality(score: float | None, threshold: float | None, measurement_stat
     return "pass" if score >= threshold else "fail"
 
 
+def _resolve_conflicts(rule_scores: list[RuleScoreV2]) -> list[RuleScoreV2]:
+    groups: dict[tuple[str, str], list[RuleScoreV2]] = {}
+    for score in rule_scores:
+        if score.conflict_group and score.score_enabled and score.rule_score is not None and score.measurement_status == "measured":
+            groups.setdefault((score.dimension, score.conflict_group), []).append(score)
+    excluded: set[str] = set()
+    for scores in groups.values():
+        if len(scores) <= 1:
+            continue
+        primary = [score for score in scores if score.primary_scoring_rule]
+        candidates = primary or scores
+        winner = sorted(candidates, key=lambda item: (item.effective_weight, item.rule_score or -1), reverse=True)[0]
+        excluded.update(score.binding_id for score in scores if score.binding_id != winner.binding_id)
+    result: list[RuleScoreV2] = []
+    for score in rule_scores:
+        if score.binding_id in excluded:
+            explanation = {**score.explanation, "conflict_excluded": True}
+            result.append(replace(score, primary_scoring_rule=False, explanation=explanation, contribution=None))
+        else:
+            result.append(score)
+    return result
+
+
 def _dimension_scores(
     rule_scores: list[RuleScoreV2],
     bindings_by_id: dict[str, DatasetRuleBinding],
@@ -156,7 +232,8 @@ def _dimension_scores(
             if score.dimension == dimension
             and score.rule_score is not None
             and score.measurement_status == "measured"
-            and bindings_by_id[score.binding_id].score_enabled
+            and score.score_enabled
+            and score.primary_scoring_rule
             and bindings_by_id[score.binding_id].scoring_method != "gate_only"
         ]
         if not scored:
@@ -190,12 +267,17 @@ def _dataset_score(
     templates_by_id: dict[str, RuleTemplate],
     policy: ScoringPolicy,
     field_roles_by_column: dict[str, set[str]],
+    policy_snapshot: dict[str, object],
 ) -> DatasetScoreV2:
     measured = [score for score in dimension_scores if score.measurement_status == "measured" and score.dimension_score is not None]
     measured_dimensions = [score.dimension for score in measured]
     excluded_dimensions = [score.dimension for score in dimension_scores if score.measurement_status != "measured"]
+    total_dimension_count = len(dimension_scores)
+    measured_dimension_count = len(measured)
+    coverage = round(measured_dimension_count / total_dimension_count, 6) if total_dimension_count else 0.0
+    score_status = _score_status(coverage)
     if not measured:
-        return DatasetScoreV2(None, "not_scored", [], excluded_dimensions, [{"reason": "no measured rule"}])
+        return DatasetScoreV2(None, "not_scored", [], excluded_dimensions, [{"reason": "no measured rule"}], coverage, 0, total_dimension_count, "insufficient_coverage", policy_snapshot=policy_snapshot)
     dataset_score = round(sum((score.dimension_score or 0.0) * score.normalized_dimension_weight for score in measured), 6)
     gate_failures = _gate_failures(rule_scores, bindings_by_id, templates_by_id, field_roles_by_column)
     if gate_failures:
@@ -206,7 +288,15 @@ def _dataset_score(
         status = "warning"
     else:
         status = "fail"
-    return DatasetScoreV2(dataset_score, status, measured_dimensions, excluded_dimensions, gate_failures)
+    return DatasetScoreV2(dataset_score, status, measured_dimensions, excluded_dimensions, gate_failures, coverage, measured_dimension_count, total_dimension_count, score_status, policy_snapshot=policy_snapshot)
+
+
+def _score_status(coverage: float) -> str:
+    if coverage >= 0.67:
+        return "final"
+    if coverage >= 0.33:
+        return "provisional"
+    return "insufficient_coverage"
 
 
 def _gate_failures(
@@ -244,3 +334,14 @@ def _roles(target_columns: list[str], roles_by_column: dict[str, set[str]]) -> s
     for column in target_columns:
         roles.update(roles_by_column.get(column, set()))
     return roles
+
+
+def _validation_scope(validation: CanonicalValidationResult) -> str:
+    scopes = {measurement.validation_scope for measurement in validation.measurement_results if measurement.validation_scope}
+    if not scopes:
+        return "full"
+    if scopes == {"full"}:
+        return "full"
+    if scopes == {"sampled"}:
+        return "sampled"
+    return "mixed"

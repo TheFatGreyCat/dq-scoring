@@ -29,6 +29,12 @@ class ProfilingConfig:
     enable_basic_anomaly_detection: bool = True
     baseline_window: int = 7
     thresholds: dict[str, Any] = field(default_factory=dict)
+    chunk_size: int = 50_000
+    memory_budget_mb: int = 512
+    time_budget_sec: int = 300
+    max_deep_columns: int = 100
+    enable_null_heavy_sampling: bool = True
+    enable_duplicate_aware_sampling: bool = True
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,19 @@ class SamplingInfo:
     sample_fraction: float | None
     sample_size: int
     total_rows: int
+    scan_mode: str = "full"
+    sample_method: str | None = None
+    random_seed: int | None = None
+    coverage_estimate: float | None = None
+    profile_confidence: float | None = None
+    chunk_size: int | None = None
+    memory_budget_mb: int | None = None
+    time_budget_sec: int | None = None
+    budget_used: dict[str, Any] = field(default_factory=dict)
+    skipped_metrics: list[str] = field(default_factory=list)
+    termination_reason: str | None = None
+    deep_profiled_columns: list[str] = field(default_factory=list)
+    profile_strategy: str = "dataframe_full"
 
 
 @dataclass
@@ -86,7 +105,19 @@ class ColumnProfile:
     null_ratio: float
     blank_count: int
     distinct_count: int
-    uniqueness_ratio: float
+    uniqueness_ratio: float | None
+    metric_scope: str = "full"
+    non_null_count: int = 0
+    distinct_count_including_null: int = 0
+    trimmed_blank_count: int = 0
+    miscast_ratio: float = 0.0
+    inferred_type_confidence: float | None = None
+    inferred_type_evidence: dict[str, Any] = field(default_factory=dict)
+    top_values_detail: list[dict[str, Any]] = field(default_factory=list)
+    patterns_detail: list[dict[str, Any]] = field(default_factory=list)
+    length_summary: dict[str, Any] = field(default_factory=dict)
+    numeric_summary: dict[str, Any] = field(default_factory=dict)
+    miscast_examples: list[str] = field(default_factory=list)
     min_value: str | None = None
     max_value: str | None = None
     mean_value: float | None = None
@@ -176,6 +207,20 @@ class ProfilingRun:
     total_rows: int
     status: str
     error_message: str | None = None
+    scan_mode: str = "full"
+    sample_method: str | None = None
+    sample_ratio: float | None = None
+    random_seed: int | None = None
+    coverage_estimate: float | None = None
+    profile_confidence: float | None = None
+    chunk_size: int | None = None
+    memory_budget_mb: int | None = None
+    time_budget_sec: int | None = None
+    budget_used: dict[str, Any] = field(default_factory=dict)
+    skipped_metrics: list[str] = field(default_factory=list)
+    termination_reason: str | None = None
+    deep_profiled_columns: list[str] = field(default_factory=list)
+    profile_strategy: str = "dataframe_full"
 
     def to_record(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -211,3 +256,4 @@ class ProfileResult:
             "anomaly_flag_count": len(self.anomaly_flags),
             "profile_store": store_path,
         }
+

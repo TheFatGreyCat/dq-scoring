@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +15,12 @@ class ProfileMetric:
     metric_value: Any
     metric_source: str
     gx_expectation_type: str | None = None
+    metric_scope: str = "full"
+    is_approximate: bool = False
+    sample_size: int | None = None
+    sample_ratio: float | None = None
+    random_seed: int | None = None
+    coverage_estimate: float | None = None
     collected_at: str = field(default_factory=lambda: iso(utc_now()) or "")
 
     def to_record(self) -> dict[str, Any]:
@@ -54,8 +60,33 @@ def _column_metrics(profile: ColumnProfile) -> list[ProfileMetric]:
         ("observed_max", profile.max_value, "gx", "expect_column_max_to_be_between"),
         ("uniqueness_evidence", {"distinct_count": profile.distinct_count, "uniqueness_ratio": profile.uniqueness_ratio}, "gx", "expect_column_values_to_be_unique"),
         ("type_conformance", {"inferred_type": profile.inferred_data_type, "miscast_count": profile.miscast_count}, "gx", "expect_column_values_to_be_of_type"),
+        ("profile_evidence", {
+            "metric_scope": profile.metric_scope,
+            "non_null_count": profile.non_null_count,
+            "distinct_count_including_null": profile.distinct_count_including_null,
+            "trimmed_blank_count": profile.trimmed_blank_count,
+            "miscast_ratio": profile.miscast_ratio,
+            "inferred_type_confidence": profile.inferred_type_confidence,
+            "inferred_type_evidence": profile.inferred_type_evidence,
+            "top_values": profile.top_values_detail,
+            "patterns": profile.patterns_detail,
+            "length_summary": profile.length_summary,
+            "numeric_summary": profile.numeric_summary,
+            "miscast_examples": profile.miscast_examples,
+        }, "pandas", None),
     ]
     return [
-        ProfileMetric(profile.run_id, profile.dataset_id, profile.column_name, name, value, source, expectation)
+        ProfileMetric(
+            profile.run_id,
+            profile.dataset_id,
+            profile.column_name,
+            name,
+            value,
+            source,
+            expectation,
+            metric_scope=profile.metric_scope,
+        )
         for name, value, source, expectation in base
     ]
+
+
