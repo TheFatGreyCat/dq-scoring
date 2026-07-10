@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -40,6 +40,9 @@ def build_profile_metrics(dataset_profile: DatasetProfile, column_profiles: list
 
 
 def _column_metrics(profile: ColumnProfile) -> list[ProfileMetric]:
+    total_count = profile.non_null_count + profile.null_count
+    missing_count = profile.null_count + profile.blank_count
+    missing_percent = round(missing_count / total_count, 6) if total_count else 0.0
     base = [
         ("inferred_type", profile.inferred_data_type, "pandas", None),
         ("null_count", profile.null_count, "pandas", None),
@@ -53,9 +56,9 @@ def _column_metrics(profile: ColumnProfile) -> list[ProfileMetric]:
         ("top_values", profile.top_values, "pandas", None),
         ("pattern_sample", profile.pattern_frequency, "pandas", None),
         ("string_length", profile.length_distribution, "pandas", None),
-        ("element_count", profile.null_count + max(profile.distinct_count, 0), "gx", "expect_column_values_to_not_be_null"),
-        ("missing_count", profile.null_count + profile.blank_count, "gx", "expect_column_values_to_not_be_null"),
-        ("missing_percent", profile.null_ratio, "gx", "expect_column_values_to_not_be_null"),
+        ("element_count", total_count, "gx", "expect_column_values_to_not_be_null"),
+        ("missing_count", missing_count, "gx", "expect_column_values_to_not_be_null"),
+        ("missing_percent", missing_percent, "gx", "expect_column_values_to_not_be_null"),
         ("observed_min", profile.min_value, "gx", "expect_column_min_to_be_between"),
         ("observed_max", profile.max_value, "gx", "expect_column_max_to_be_between"),
         ("uniqueness_evidence", {"distinct_count": profile.distinct_count, "uniqueness_ratio": profile.uniqueness_ratio}, "gx", "expect_column_values_to_be_unique"),
@@ -85,8 +88,8 @@ def _column_metrics(profile: ColumnProfile) -> list[ProfileMetric]:
             source,
             expectation,
             metric_scope=profile.metric_scope,
+            is_approximate=profile.metric_scope != "full",
+            sample_size=total_count if profile.metric_scope != "full" else None,
         )
         for name, value, source, expectation in base
     ]
-
-
