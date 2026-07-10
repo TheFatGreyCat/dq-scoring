@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -10,15 +10,17 @@ from uuid import uuid4
 
 from dq_core.models import CanonicalValidationResult, DatasetColumn, DatasetRuleBinding, PipelineLog, RuleRecommendation, RuleRecommendationRun, ValidationIssueSample
 from persistence.repository import DqPostgresRepository
+from persistence.seed import default_scoring_policies
+from profiling.adaptive import profile_csv_in_chunks
 from profiling.column_profile import profile_columns
 from profiling.dataset_profile import profile_dataset
 from profiling.loading import load_dataset
 from profiling.metrics import build_profile_metrics
-from profiling.models import DatasetConfig, ProfileResult, ProfilingRun
+from profiling.models import DatasetConfig, DatasetProfile, ProfileResult, ProfilingRun, SamplingInfo
 from profiling.sampling import sample_dataset
 from profiling.schema_profile import profile_schema
 from profiling.semantic_detection import detect_semantics
-from rules_engine.catalog import binding_from_recommendation, catalog_revision, default_rule_templates, recommend_rules
+from rules_engine.catalog import binding_from_recommendation, can_auto_bind_recommendation, catalog_revision, default_rule_templates, recommend_rules
 from rules_engine.evaluators import RuleEvaluator, not_measured_result
 from rules_engine.models import RuleConfig, iso
 from scoring.v2 import calculate_scores as calculate_scores_v2
@@ -41,12 +43,56 @@ class DqRuntime:
         started_at = perf_counter()
         bundle = self.repository.load_dataset_bundle(dataset_version_id)
         config = dataset_config_from_bundle(bundle)
-        dataframe = load_dataset(config)
-        profiled_df, sampling = sample_dataset(dataframe, config)
         profile_run_id = f"PRUN-{uuid4().hex[:12].upper()}"
-        schema = profile_schema(dataframe, config)
-        columns = profile_columns(profiled_df, config, run_id=profile_run_id, metric_scope=sampling.scan_mode)
-        dataset_profile = profile_dataset(dataframe, config, run_id=profile_run_id, started_at=started_at)
+        if _should_profile_in_chunks(config):
+            summary = profile_csv_in_chunks(config.storage_path, config)
+            profiled_df = summary.sample
+            schema = profile_schema(profiled_df, config)
+            columns = profile_columns(profiled_df, config, run_id=profile_run_id, metric_scope="sampled")
+            columns = [_apply_chunked_counts(profile, summary) for profile in columns]
+            duplicate_count = int(profiled_df.duplicated().sum()) if len(profiled_df) else 0
+            dataset_profile = DatasetProfile(
+                run_id=profile_run_id,
+                dataset_id=config.dataset_id,
+                row_count=summary.row_count,
+                column_count=summary.column_count,
+                duplicate_row_count=duplicate_count,
+                duplicate_row_ratio=round(duplicate_count / len(profiled_df), 6) if len(profiled_df) else 0.0,
+                last_updated_timestamp=None,
+                profiling_timestamp=datetime.now(timezone.utc).isoformat(),
+                freshness_time_basis=config.freshness_time_basis,
+                freshness_lag=None,
+                expected_row_count=config.sla_config.get("expected_row_count"),
+                volume_deviation_rate=None,
+                profile_duration_seconds=round(perf_counter() - started_at, 6),
+            )
+            sample_fraction = round(len(profiled_df) / summary.row_count, 6) if summary.row_count else 0.0
+            sampling = SamplingInfo(
+                sampling_method="chunked_budget",
+                is_sampled=True,
+                sample_fraction=sample_fraction,
+                sample_size=len(profiled_df),
+                total_rows=summary.row_count,
+                scan_mode="sampled",
+                sample_method="chunked_budget",
+                random_seed=config.profiling_config.random_seed,
+                coverage_estimate=sample_fraction,
+                profile_confidence=sample_fraction,
+                chunk_size=config.profiling_config.chunk_size,
+                memory_budget_mb=config.profiling_config.memory_budget_mb,
+                time_budget_sec=config.profiling_config.time_budget_sec,
+                budget_used={"sample_size": len(profiled_df), "row_count": summary.row_count},
+                skipped_metrics=["full_dataframe_deep_metrics"],
+                termination_reason="memory_budget",
+                deep_profiled_columns=list(profiled_df.columns),
+                profile_strategy="chunked_budget",
+            )
+        else:
+            dataframe = load_dataset(config)
+            profiled_df, sampling = sample_dataset(dataframe, config)
+            schema = profile_schema(dataframe, config)
+            columns = profile_columns(profiled_df, config, run_id=profile_run_id, metric_scope=sampling.scan_mode)
+            dataset_profile = profile_dataset(dataframe, config, run_id=profile_run_id, started_at=started_at)
         run = ProfilingRun(
             run_id=dataset_profile.run_id,
             dataset_id=config.dataset_id,
@@ -103,10 +149,13 @@ class DqRuntime:
 
     def bootstrap_catalog(self) -> dict[str, int]:
         templates = default_rule_templates()
+        policies = default_scoring_policies()
         if hasattr(self.repository, "bootstrap_catalog"):
-            return self.repository.bootstrap_catalog(templates)
+            return self.repository.bootstrap_catalog(templates, policies)
         self.repository.save_rule_templates(templates)
-        return {"rule_template": len(templates)}
+        if hasattr(self.repository, "save_scoring_policies"):
+            self.repository.save_scoring_policies(policies)
+        return {"rule_template": len(templates), "scoring_policy": len(policies)}
 
     def catalog_inventory(self) -> dict[str, Any]:
         from rules_engine.catalog import backend_coverage_matrix, catalog_inventory, validate_catalog
@@ -149,9 +198,18 @@ class DqRuntime:
         templates = {item.rule_template_id: item for item in default_rule_templates()}
         if accept_all_above_threshold:
             recommendations = [RuleRecommendation(**item) for item in self.recommend_rules(dataset_version_id)]
-            selected = [item for item in recommendations if (item.candidate_score if item.candidate_score is not None else item.confidence) >= threshold]
+            selected = [
+                item
+                for item in recommendations
+                if item.rule_template_id in templates
+                and (item.candidate_score if item.candidate_score is not None else item.confidence) >= threshold
+                and can_auto_bind_recommendation(item, templates[item.rule_template_id])
+            ]
         elif hasattr(self.repository, "load_latest_recommendations"):
-            selected = self.repository.load_latest_recommendations(dataset_version_id, decision="accepted")
+            selected = [
+                *self.repository.load_latest_recommendations(dataset_version_id, decision="accepted"),
+                *self.repository.load_latest_recommendations(dataset_version_id, decision="edited"),
+            ]
         else:
             selected = []
         bindings = [
@@ -215,9 +273,11 @@ class DqRuntime:
             measurements.append(measurement)
             summaries.append(summary)
         result = CanonicalValidationResult(validation_run_id, dataset_version_id, measurements, summaries, issue_samples)
-        self.repository.save_validation_result(result, hash_value)
+        validation_status = "partial_success" if any(item.measurement_status == "not_measured" for item in measurements) else "success"
+        self.repository.save_validation_result(result, hash_value, status=validation_status)
         self._log(dataset_version_id, "run_validation", "success", f"Validated {len(bindings)} bindings")
         return validation_run_id
+
     def calculate_score(self, validation_run_id: str, scoring_policy_id: str | None = None) -> str:
         validation = self.repository.load_validation_result(validation_run_id)
         bundle = self.repository.load_dataset_bundle(validation.dataset_version_id)
@@ -262,7 +322,7 @@ def dataset_config_from_bundle(bundle: Any) -> DatasetConfig:
         dataset_name=bundle.dataset.dataset_name,
         dataset_type=bundle.dataset.dataset_type,
         source_type=bundle.dataset.source_type,
-        storage_path=bundle.dataset.storage_path,
+        storage_path=bundle.version.storage_path or bundle.dataset.storage_path,
         declared_schema={
             column.column_name: {"data_type": column.declared_data_type or "string", "nullable": True if column.nullable is None else column.nullable}
             for column in columns
@@ -274,6 +334,40 @@ def dataset_config_from_bundle(bundle: Any) -> DatasetConfig:
         timestamp_column=next((column.column_name for column in columns if column.is_timestamp), None),
     )
 
+
+
+
+def _should_profile_in_chunks(config: DatasetConfig) -> bool:
+    path = Path(config.storage_path)
+    if not path.exists() or not path.is_file():
+        return False
+    budget_mb = config.profiling_config.memory_budget_mb
+    if budget_mb <= 0:
+        return True
+    return path.stat().st_size / (1024 * 1024) > budget_mb
+
+
+def _apply_chunked_counts(profile: Any, summary: Any) -> Any:
+    total = summary.row_count
+    null_count = int(summary.null_counts.get(profile.column_name, profile.null_count))
+    blank_count = int(summary.blank_counts.get(profile.column_name, profile.blank_count))
+    non_null_count = max(total - null_count, 0)
+    evidence = dict(profile.inferred_type_evidence)
+    if profile.column_name in summary.parse_ratio:
+        evidence["chunked_numeric_parse_ratio"] = summary.parse_ratio[profile.column_name]
+    numeric_min = summary.numeric_min.get(profile.column_name)
+    numeric_max = summary.numeric_max.get(profile.column_name)
+    return replace(
+        profile,
+        null_count=null_count,
+        null_ratio=round(null_count / total, 6) if total else 0.0,
+        blank_count=blank_count,
+        non_null_count=non_null_count,
+        trimmed_blank_count=blank_count,
+        inferred_type_evidence=evidence,
+        min_value=str(numeric_min) if numeric_min is not None else profile.min_value,
+        max_value=str(numeric_max) if numeric_max is not None else profile.max_value,
+    )
 
 def rule_config_from_binding(dataset_id: str, binding: DatasetRuleBinding, template: Any) -> RuleConfig:
     target_column = binding.target_columns[0] if len(binding.target_columns) == 1 else None
@@ -308,9 +402,3 @@ def _json_default(value: Any) -> Any:
         return asdict(value)
     except TypeError:
         return str(value)
-
-
-
-
-
-

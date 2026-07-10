@@ -59,6 +59,7 @@ class DatasetVersion:
     source_fingerprint: str | None
     row_count: int | None = None
     created_at: str = field(default_factory=lambda: iso(utc_now()) or "")
+    storage_path: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -302,4 +303,3 @@ class PipelineLog:
 def _require(field_name: str, value: str, allowed: set[str]) -> None:
     if value not in allowed:
         raise ValueError(f"Unsupported {field_name} '{value}'")
-

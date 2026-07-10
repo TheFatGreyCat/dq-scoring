@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import fnmatch
 import re
@@ -176,6 +176,21 @@ def binding_from_recommendation(
         primary_scoring_rule=template.primary_scoring_rule,
         validation_only=template.validation_only,
     )
+
+
+def can_auto_bind_recommendation(recommendation: RuleRecommendation, template: RuleTemplate) -> bool:
+    if recommendation.source == "review_required":
+        return False
+    if recommendation.ambiguity_status == "ambiguous":
+        return False
+    if any("review" in warning.lower() for warning in recommendation.warnings):
+        return False
+    metadata = template.recommendation_metadata or {}
+    if bool(metadata.get("requires_user_review")):
+        return False
+    if "auto_bind_allowed" in metadata and not bool(metadata.get("auto_bind_allowed")):
+        return False
+    return True
 
 
 def catalog_revision(templates: Iterable[RuleTemplate] | None = None) -> str:
@@ -471,4 +486,3 @@ def _dedupe(recommendations: list[RuleRecommendation]) -> list[RuleRecommendatio
 
 def _stable_id(*parts: str) -> str:
     return sha1("|".join(parts).encode("utf-8")).hexdigest()[:12].upper()
-

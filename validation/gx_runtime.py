@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import contextlib
 import io
@@ -94,7 +94,7 @@ class GxRuntimeEvaluator:
             condition = converted.notna() & (converted <= now)
             statuses.loc[eligible] = condition.map(lambda value: "passed" if value else "failed")
 
-        measurement, summary = _canonical(validation_run_id, binding, operator, parameters, statuses, gx_raw)
+        measurement, summary = _canonical(validation_run_id, binding, operator, parameters, statuses, gx_raw, null_policy)
         self.last_issue_samples = _issue_samples(dataframe, statuses, validation_run_id, binding, operator, parameters, rule_code, sample_limit)
         return measurement, summary
 
@@ -149,6 +149,7 @@ def _canonical(
     parameters: dict[str, Any],
     statuses: pd.Series,
     gx_raw: dict[str, Any],
+    null_policy: str,
 ) -> tuple[MeasurementResult, RecordMeasurementSummary]:
     counts = statuses.value_counts().to_dict()
     passed = int(counts.get("passed", 0))
@@ -156,13 +157,14 @@ def _canonical(
     missing = int(counts.get("empty", 0))
     not_applicable = int(counts.get("not_applicable", 0))
     measurement_id = f"MR-{validation_run_id}-{binding.binding_id}"
-    records_in_scope = passed + failed
+    records_in_scope = passed + failed + missing if null_policy == "fail" else passed + failed
+    expectation_success = failed == 0 and (missing == 0 if null_policy == "fail" else True)
     measurement = MeasurementResult(
         measurement_result_id=measurement_id,
         validation_run_id=validation_run_id,
         binding_id=binding.binding_id,
         evaluation_unit="record",
-        expectation_success=failed == 0,
+        expectation_success=expectation_success,
         measurement_status="measured",
         observed_value={"passed": passed, "failed": failed, "missing": missing, "not_applicable": not_applicable, "gx_result": gx_raw},
         expected_spec={"operator": operator, "parameters": parameters},
@@ -213,5 +215,3 @@ def _expected_condition(operator: str, parameters: dict[str, Any], rule_code: st
     if operator == "range":
         return f"between {parameters.get('min_value')} and {parameters.get('max_value')}"
     return operator
-
-
