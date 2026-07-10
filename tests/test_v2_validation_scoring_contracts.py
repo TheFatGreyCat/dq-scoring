@@ -19,7 +19,7 @@ from validation.gx_adapter import MapExpectationAdapter
 from validation.planner import GX_RESULT_FORMAT, plan_execution, ruleset_hash
 
 
-class RefactorV2ContractTests(unittest.TestCase):
+class V2ValidationScoringContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = load_config("data/configs/customer_master.yaml")
         self.dataframe = load_dataset(self.config)
