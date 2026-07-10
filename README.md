@@ -1,6 +1,6 @@
 ﻿# DQ Scoring
 
-DQ Scoring is a PostgreSQL-backed data quality runtime. Streamlit and CLI entrypoints go through `dq_core.runtime` / `dq_core.orchestration`; SQLite stores, per-dataset YAML runtime files, Scoring V1, and legacy pandas validation runners are no longer runtime paths.
+DQ Scoring is a PostgreSQL-backed data quality runtime. Streamlit and CLI entrypoints go through `dq_core.runtime` / `dq_core.orchestration`; SQLite stores, per-dataset YAML runtime files, Scoring V1, and legacy pandas validation runners are not runtime paths.
 
 ## Architecture
 
@@ -28,25 +28,19 @@ PostgreSQL stores dataset metadata, profiling results, rule templates, rule bind
 docker compose up -d postgres
 $env:DQ_DATABASE_URL='postgresql://dq:dq@localhost:5432/dq_scoring'
 .\.venv\Scripts\python.exe -m persistence.db migrate
+.\.venv\Scripts\python.exe -m dq_core.cli health_check
 ```
 
-Seed demo metadata from the legacy sample YAML once:
-
-```powershell
-.\.venv\Scripts\python.exe -m persistence.import_legacy --dry-run
-.\.venv\Scripts\python.exe -m persistence.import_legacy --reset --report backups/import-report/import.json
-```
-
-`--dry-run`, `--reset`, `--dataset <id>`, and `--report <path>` are supported. The importer migrates dataset metadata, rule templates, rule bindings, and scoring policies only; V1 profiling, validation, score history, and SQLite artifacts are not migrated.
+`DQ_DATABASE_URL` is read from the environment or `.env`. The dashboard and CLI do not accept database URLs from end users.
 
 ## CLI
 
 ```powershell
 .\.venv\Scripts\python.exe -m dq_core.cli register_dataset --csv data/samples/customer_master.csv --dataset-id customer_master --dataset-type customer
-.\.venv\Scripts\python.exe -m dq_core.cli profile_dataset --dataset-version-id DV-customer_master-legacy
-.\.venv\Scripts\python.exe -m dq_core.cli recommend_rules --dataset-version-id DV-customer_master-legacy
-.\.venv\Scripts\python.exe -m dq_core.cli save_recommended_bindings --dataset-version-id DV-customer_master-legacy
-.\.venv\Scripts\python.exe -m dq_core.cli run_validation --dataset-version-id DV-customer_master-legacy
+.\.venv\Scripts\python.exe -m dq_core.cli profile_dataset --dataset-version-id <dataset_version_id>
+.\.venv\Scripts\python.exe -m dq_core.cli recommend_rules --dataset-version-id <dataset_version_id>
+.\.venv\Scripts\python.exe -m dq_core.cli save_recommended_bindings --dataset-version-id <dataset_version_id>
+.\.venv\Scripts\python.exe -m dq_core.cli run_validation --dataset-version-id <dataset_version_id>
 .\.venv\Scripts\python.exe -m dq_core.cli calculate_score --validation-run-id <validation_run_id>
 .\.venv\Scripts\python.exe -m dq_core.cli get_run_result --score-run-id <score_run_id>
 ```
@@ -58,7 +52,7 @@ $env:DQ_DATABASE_URL='postgresql://dq:dq@localhost:5432/dq_scoring'
 .\.venv\Scripts\streamlit.exe run dashboard\app.py
 ```
 
-The dashboard reads PostgreSQL through the repository layer. Dataset onboarding registers CSV metadata directly into storage and can run profile -> recommend -> bind -> validate -> score in one flow.
+The dashboard reads PostgreSQL through the repository layer, shows a System Health tab, and registers CSV metadata directly into storage. Dataset onboarding can run profile -> recommend -> bind -> validate -> score in one flow.
 
 ## Tests
 
@@ -66,14 +60,18 @@ The dashboard reads PostgreSQL through the repository layer. Dataset onboarding 
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The test suite covers contract invariants, legacy importer dry-run/idempotency, GX canonical adapters, Scoring behavior, dashboard PostgreSQL row transformation, and an end-to-end runtime slice with a fake repository.
+The test suite covers contract invariants, GX canonical adapters, Scoring behavior, dashboard PostgreSQL row transformation, health masking/status behavior, cleanup guardrails, and an end-to-end runtime slice with a fake repository.
 
 ## Legacy Boundary
 
-Legacy CSV samples and YAML files remain as seed/import fixtures. They are not runtime configuration. The removed runtime paths are:
+Legacy CSV samples and YAML files may remain as fixtures or examples, but they are not runtime bootstrap paths. The runtime paths are PostgreSQL migrations, dataset registration, profiling, rule recommendation, validation, scoring, and dashboard reporting.
+
+The removed runtime paths are:
 
 - SQLite repositories
 - per-dataset YAML service/CLI/dashboard execution
+- legacy metadata importer commands
+- sample-data auto bootstrap
 - Scoring V1 runtime
 - legacy pandas validation CLI runner
 
