@@ -7,12 +7,15 @@ from typing import Any
 
 import pandas as pd
 
-from dq_core.models import DatasetRuleBinding, MeasurementResult, RecordMeasurementSummary
+from dq_core.models import DatasetRuleBinding, MeasurementResult, RecordMeasurementSummary, ValidationIssueSample, iso, utc_now
 from validation.planner import GX_SUPPORTED_OPERATORS
 
 
 class GxRuntimeEvaluator:
     """GX-backed canonical adapter for standard dataframe expectations."""
+
+    def __init__(self) -> None:
+        self.last_issue_samples: list[ValidationIssueSample] = []
 
     def evaluate(
         self,
@@ -23,6 +26,8 @@ class GxRuntimeEvaluator:
         parameters: dict[str, Any],
         *,
         null_policy: str,
+        rule_code: str | None = None,
+        sample_limit: int = 20,
     ) -> tuple[MeasurementResult, RecordMeasurementSummary]:
         if operator not in GX_SUPPORTED_OPERATORS:
             raise ValueError(f"Operator '{operator}' is not supported by GX runtime")
@@ -36,8 +41,8 @@ class GxRuntimeEvaluator:
         eligible = ~empty
         if null_policy == "fail":
             statuses.loc[empty] = "empty"
-        elif null_policy in {"ignore", "separate"}:
-            statuses.loc[empty] = "not_applicable" if null_policy == "ignore" else "empty"
+        elif null_policy in {"ignore", "separate", "not_applicable"}:
+            statuses.loc[empty] = "not_applicable" if null_policy in {"ignore", "not_applicable"} else "empty"
         else:
             raise ValueError(f"Unsupported null_policy '{null_policy}'")
 
@@ -89,7 +94,9 @@ class GxRuntimeEvaluator:
             condition = converted.notna() & (converted <= now)
             statuses.loc[eligible] = condition.map(lambda value: "passed" if value else "failed")
 
-        return _canonical(validation_run_id, binding, operator, parameters, statuses, gx_raw)
+        measurement, summary = _canonical(validation_run_id, binding, operator, parameters, statuses, gx_raw)
+        self.last_issue_samples = _issue_samples(dataframe, statuses, validation_run_id, binding, operator, parameters, rule_code, sample_limit)
+        return measurement, summary
 
 
 def _run_gx_expectation(
@@ -164,3 +171,47 @@ def _canonical(
     )
     summary = RecordMeasurementSummary(measurement_id, passed, failed, missing, not_applicable, records_in_scope)
     return measurement, summary
+
+
+def _issue_samples(
+    dataframe: pd.DataFrame,
+    statuses: pd.Series,
+    validation_run_id: str,
+    binding: DatasetRuleBinding,
+    operator: str,
+    parameters: dict[str, Any],
+    rule_code: str | None,
+    sample_limit: int,
+) -> list[ValidationIssueSample]:
+    sampled_at = iso(utc_now()) or ""
+    indexes = statuses[statuses.isin({"failed", "empty", "miscast"})].head(sample_limit).index
+    target_column = binding.target_columns[0] if binding.target_columns else None
+    samples: list[ValidationIssueSample] = []
+    for index in indexes:
+        actual_value = str(dataframe.at[index, target_column]) if target_column and target_column in dataframe.columns else None
+        samples.append(
+            ValidationIssueSample(
+                validation_run_id=validation_run_id,
+                binding_id=binding.binding_id,
+                record_key=str(index),
+                target_column=target_column,
+                actual_value=actual_value,
+                expected_condition=_expected_condition(operator, parameters, rule_code),
+                issue_type=str(statuses.loc[index]),
+                rule_code=rule_code,
+                sampled_at=sampled_at,
+            )
+        )
+    return samples
+
+
+def _expected_condition(operator: str, parameters: dict[str, Any], rule_code: str | None) -> str:
+    if rule_code:
+        return rule_code
+    if operator == "regex":
+        return f"match regex {parameters.get('pattern')}"
+    if operator == "range":
+        return f"between {parameters.get('min_value')} and {parameters.get('max_value')}"
+    return operator
+
+

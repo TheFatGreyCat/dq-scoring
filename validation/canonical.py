@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dq_core.models import CanonicalValidationResult, DatasetRuleBinding, MeasurementResult, RecordMeasurementSummary
 from rules_engine.models import RuleEvaluationResult, RulesEngineResult
@@ -16,7 +16,7 @@ def canonicalize_rule_evaluation(
     not_applicable_count = evaluation.not_applicable
     if null_policy == "fail":
         records_in_scope = evaluation.passed + failed_count + missing_count
-    elif null_policy in {"ignore", "separate"}:
+    elif null_policy in {"ignore", "separate", "not_applicable"}:
         records_in_scope = evaluation.passed + failed_count
         if null_policy == "ignore":
             not_applicable_count += missing_count
@@ -79,3 +79,4 @@ def canonicalize_rules_engine_result(
         measurements.append(measurement)
         summaries.append(summary)
     return CanonicalValidationResult(validation_run_id, dataset_version_id, measurements, summaries)
+
