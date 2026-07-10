@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import asdict
@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from dq_core.models import CanonicalValidationResult, DatasetColumn, DatasetRuleBinding, PipelineLog, RuleRecommendation
+from dq_core.models import CanonicalValidationResult, DatasetColumn, DatasetRuleBinding, PipelineLog, RuleRecommendation, RuleRecommendationRun, ValidationIssueSample
 from persistence.repository import DqPostgresRepository
 from profiling.column_profile import profile_columns
 from profiling.dataset_profile import profile_dataset
@@ -18,7 +18,7 @@ from profiling.models import DatasetConfig, ProfileResult, ProfilingRun
 from profiling.sampling import sample_dataset
 from profiling.schema_profile import profile_schema
 from profiling.semantic_detection import detect_semantics
-from rules_engine.catalog import binding_from_recommendation, default_rule_templates, recommend_rules
+from rules_engine.catalog import binding_from_recommendation, catalog_revision, default_rule_templates, recommend_rules
 from rules_engine.evaluators import RuleEvaluator, not_measured_result
 from rules_engine.models import RuleConfig, iso
 from scoring.v2 import calculate_scores as calculate_scores_v2
@@ -43,9 +43,10 @@ class DqRuntime:
         config = dataset_config_from_bundle(bundle)
         dataframe = load_dataset(config)
         profiled_df, sampling = sample_dataset(dataframe, config)
-        schema = profile_schema(profiled_df, config)
-        columns = profile_columns(profiled_df, config, run_id=f"PRUN-{uuid4().hex[:12].upper()}")
-        dataset_profile = profile_dataset(profiled_df, config, run_id=columns[0].run_id if columns else f"PRUN-{uuid4().hex[:12].upper()}", started_at=started_at)
+        profile_run_id = f"PRUN-{uuid4().hex[:12].upper()}"
+        schema = profile_schema(dataframe, config)
+        columns = profile_columns(profiled_df, config, run_id=profile_run_id, metric_scope=sampling.scan_mode)
+        dataset_profile = profile_dataset(dataframe, config, run_id=profile_run_id, started_at=started_at)
         run = ProfilingRun(
             run_id=dataset_profile.run_id,
             dataset_id=config.dataset_id,
@@ -60,6 +61,20 @@ class DqRuntime:
             sample_size=sampling.sample_size,
             total_rows=sampling.total_rows,
             status="success",
+            scan_mode=sampling.scan_mode,
+            sample_method=sampling.sample_method,
+            sample_ratio=sampling.sample_fraction,
+            random_seed=sampling.random_seed,
+            coverage_estimate=sampling.coverage_estimate,
+            profile_confidence=sampling.profile_confidence,
+            chunk_size=sampling.chunk_size,
+            memory_budget_mb=sampling.memory_budget_mb,
+            time_budget_sec=sampling.time_budget_sec,
+            budget_used=sampling.budget_used,
+            skipped_metrics=sampling.skipped_metrics,
+            termination_reason=sampling.termination_reason,
+            deep_profiled_columns=sampling.deep_profiled_columns,
+            profile_strategy=sampling.profile_strategy,
         )
         result = ProfileResult(run, schema, dataset_profile, columns, [], [])
         semantics = {item.column_name: item for item in detect_semantics(columns)}
@@ -86,6 +101,23 @@ class DqRuntime:
         self._log(dataset_version_id, "profile_dataset", "success", f"Profiled {config.dataset_id}")
         return dataset_profile.run_id
 
+    def bootstrap_catalog(self) -> dict[str, int]:
+        templates = default_rule_templates()
+        if hasattr(self.repository, "bootstrap_catalog"):
+            return self.repository.bootstrap_catalog(templates)
+        self.repository.save_rule_templates(templates)
+        return {"rule_template": len(templates)}
+
+    def catalog_inventory(self) -> dict[str, Any]:
+        from rules_engine.catalog import backend_coverage_matrix, catalog_inventory, validate_catalog
+
+        templates = default_rule_templates()
+        return {
+            "rules": catalog_inventory(templates),
+            "backend_coverage": backend_coverage_matrix(templates),
+            "issues": validate_catalog(templates),
+        }
+
     def recommend_rules(self, dataset_version_id: str) -> list[dict[str, Any]]:
         bundle = self.repository.load_dataset_bundle(dataset_version_id)
         config = dataset_config_from_bundle(bundle)
@@ -94,17 +126,38 @@ class DqRuntime:
         semantics = detect_semantics(columns)
         templates = default_rule_templates()
         self.repository.save_rule_templates(templates)
-        recommendations = recommend_rules(columns, semantics, config, templates)
+        recommendation_run_id = f"RREC-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
+        recommendations = recommend_rules(columns, semantics, config, templates, recommendation_run_id=recommendation_run_id)
+        if hasattr(self.repository, "save_recommendation_run"):
+            run = RuleRecommendationRun(
+                recommendation_run_id=recommendation_run_id,
+                dataset_version_id=dataset_version_id,
+                profile_fingerprint=bundle.version.source_fingerprint,
+                catalog_revision=catalog_revision(templates),
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self.repository.save_recommendation_run(run, recommendations)
         self._log(dataset_version_id, "recommend_rules", "success", f"Generated {len(recommendations)} recommendations")
         return [item.to_record() for item in recommendations]
 
-    def save_recommended_rule_bindings(self, dataset_version_id: str) -> str:
+    def review_recommendation(self, recommendation_id: str, decision: str, suggested_parameters: dict[str, Any] | None = None) -> str:
+        if not hasattr(self.repository, "review_recommendation"):
+            raise RuntimeError("Repository does not support recommendation review")
+        return self.repository.review_recommendation(recommendation_id, decision, suggested_parameters)
+
+    def save_recommended_rule_bindings(self, dataset_version_id: str, *, accept_all_above_threshold: bool = False, threshold: float = 0.85) -> str:
         templates = {item.rule_template_id: item for item in default_rule_templates()}
-        recommendations = self.recommend_rules(dataset_version_id)
+        if accept_all_above_threshold:
+            recommendations = [RuleRecommendation(**item) for item in self.recommend_rules(dataset_version_id)]
+            selected = [item for item in recommendations if (item.candidate_score if item.candidate_score is not None else item.confidence) >= threshold]
+        elif hasattr(self.repository, "load_latest_recommendations"):
+            selected = self.repository.load_latest_recommendations(dataset_version_id, decision="accepted")
+        else:
+            selected = []
         bindings = [
-            binding_from_recommendation(RuleRecommendation(**item), templates[item["rule_template_id"]], dataset_version_id).to_record()
-            for item in recommendations
-            if item["confidence"] >= 0.85
+            binding_from_recommendation(item, templates[item.rule_template_id], dataset_version_id).to_record()
+            for item in selected
+            if item.rule_template_id in templates
         ]
         return self.repository.save_rule_bindings(dataset_version_id, bindings, [])
 
@@ -121,6 +174,7 @@ class DqRuntime:
         validation_run_id = f"VRUN-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
         measurements = []
         summaries = []
+        issue_samples: list[ValidationIssueSample] = []
         evaluator = RuleEvaluator()
         gx_evaluator = GxRuntimeEvaluator()
         for binding in bindings:
@@ -135,20 +189,35 @@ class DqRuntime:
                         template.operator,
                         {**template.parameters, **binding.parameters},
                         null_policy=template.null_policy,
+                        rule_code=template.rule_code,
                     )
+                    issue_samples.extend(gx_evaluator.last_issue_samples)
                 else:
-                    evaluation = evaluator.evaluate(dataframe, config, rule)
+                    evaluation, samples = evaluator.evaluate_with_samples(dataframe, config, rule, validation_run_id)
                     measurement, summary = canonicalize_rule_evaluation(validation_run_id, evaluation, binding, null_policy=template.null_policy)
+                    issue_samples.extend(
+                        ValidationIssueSample(
+                            validation_run_id=validation_run_id,
+                            binding_id=binding.binding_id,
+                            record_key=sample.record_key,
+                            target_column=sample.target_column,
+                            actual_value=sample.actual_value,
+                            expected_condition=sample.expected_condition,
+                            issue_type=sample.issue_type,
+                            rule_code=template.rule_code,
+                            sampled_at=sample.sampled_at,
+                        )
+                        for sample in samples
+                    )
             except Exception as exc:
                 evaluation = not_measured_result(validation_run_id, rule, str(exc))
                 measurement, summary = canonicalize_rule_evaluation(validation_run_id, evaluation, binding, null_policy=template.null_policy)
             measurements.append(measurement)
             summaries.append(summary)
-        result = CanonicalValidationResult(validation_run_id, dataset_version_id, measurements, summaries)
+        result = CanonicalValidationResult(validation_run_id, dataset_version_id, measurements, summaries, issue_samples)
         self.repository.save_validation_result(result, hash_value)
         self._log(dataset_version_id, "run_validation", "success", f"Validated {len(bindings)} bindings")
         return validation_run_id
-
     def calculate_score(self, validation_run_id: str, scoring_policy_id: str | None = None) -> str:
         validation = self.repository.load_validation_result(validation_run_id)
         bundle = self.repository.load_dataset_bundle(validation.dataset_version_id)
@@ -239,5 +308,9 @@ def _json_default(value: Any) -> Any:
         return asdict(value)
     except TypeError:
         return str(value)
+
+
+
+
 
 

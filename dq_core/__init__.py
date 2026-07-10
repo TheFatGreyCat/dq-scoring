@@ -9,6 +9,7 @@ from dq_core.models import (
     PipelineLog,
     RecordMeasurementSummary,
     RuleRecommendation,
+    RuleRecommendationRun,
     RuleTemplate,
     ScoringPolicy,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "PipelineLog",
     "RecordMeasurementSummary",
     "RuleRecommendation",
+    "RuleRecommendationRun",
     "RuleTemplate",
     "ScoringPolicy",
 ]

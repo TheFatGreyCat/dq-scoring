@@ -11,7 +11,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from dq_core.runtime import DqRuntime, to_json  # noqa: E402
-from persistence.import_legacy import import_legacy  # noqa: E402
 from persistence.repository import DqPostgresRepository  # noqa: E402
 
 
@@ -25,7 +24,6 @@ DATASETS = {
 
 def generate_demo_data(datasets: Iterable[str], export_dir: str | Path = "data/score_store") -> list[dict[str, object]]:
     selected = _resolve_datasets(datasets)
-    import_legacy(root=ROOT, datasets=selected, dry_run=False, reset=False)
     runtime = DqRuntime(DqPostgresRepository())
     export_path = Path(export_dir)
     export_path.mkdir(parents=True, exist_ok=True)
@@ -52,7 +50,7 @@ def generate_demo_data(datasets: Iterable[str], export_dir: str | Path = "data/s
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate demo DQ Score data")
+    parser = argparse.ArgumentParser(description="Generate score artifacts for already registered demo datasets")
     parser.add_argument("--datasets", nargs="+", default=["all"])
     parser.add_argument("--export-dir", default="data/score_store")
     args = parser.parse_args()
