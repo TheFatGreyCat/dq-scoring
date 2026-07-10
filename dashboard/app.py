@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -28,9 +28,11 @@ STATUS_COLORS = {
 
 V2_SETUP_COMMANDS = [
     "python -m persistence.db migrate",
+    "python -m dq_core.cli bootstrap_catalog",
     "python -m dq_core.cli register_dataset --csv data/samples/customer_master.csv --dataset-id customer_master --dataset-type customer",
     "python -m dq_core.cli profile_dataset --dataset-version-id <dataset_version_id>",
     "python -m dq_core.cli recommend_rules --dataset-version-id <dataset_version_id>",
+    "python -m dq_core.cli review_recommendation --recommendation-id <recommendation_id> --decision accepted",
     "python -m dq_core.cli save_recommended_bindings --dataset-version-id <dataset_version_id>",
     "python -m dq_core.cli run_validation --dataset-version-id <dataset_version_id>",
     "python -m dq_core.cli calculate_score --validation-run-id <validation_run_id>",
@@ -117,9 +119,6 @@ def _render_onboarding(runtime: DqRuntime) -> None:
 
     run_now = st.checkbox("Run baseline after register", value=True)
     if st.button("Register Dataset", type="primary"):
-        temp_path = ROOT / "data" / "uploads" / uploaded.name
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.write_bytes(csv_content)
         metadata = {
             "dataset_id": dataset_id,
             "dataset_name": dataset_name,
@@ -130,9 +129,8 @@ def _render_onboarding(runtime: DqRuntime) -> None:
             "mandatory_fields": mandatory_fields,
             "cde_fields": cde_fields,
             "timestamp_column": timestamp_column or None,
-            "storage_path": str(temp_path),
         }
-        dataset_version_id = runtime.register_dataset(temp_path, metadata)
+        dataset_version_id = runtime.register_dataset_bytes(csv_content, metadata)
         summary = {"dataset_version_id": dataset_version_id}
         if run_now:
             summary["profiling_run_id"] = runtime.profile_dataset(dataset_version_id)

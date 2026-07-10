@@ -1,4 +1,4 @@
-﻿ALTER TABLE dataset_version ADD COLUMN IF NOT EXISTS storage_path TEXT;
+ALTER TABLE dataset_version ADD COLUMN IF NOT EXISTS storage_path TEXT;
 
 UPDATE dataset_version v
 SET storage_path = d.storage_path

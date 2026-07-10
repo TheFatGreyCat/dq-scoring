@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from typing import Any
 
 from dq_core.health import get_system_health
@@ -64,7 +63,6 @@ def main() -> None:
             "mandatory_fields": args.mandatory_field,
             "cde_fields": args.cde_field,
             "timestamp_column": args.timestamp_column,
-            "storage_path": str(Path(args.csv)),
         }
         output = {"dataset_version_id": runtime.register_dataset(args.csv, metadata)}
     elif args.command == "profile_dataset":

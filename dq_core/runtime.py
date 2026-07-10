@@ -35,7 +35,10 @@ class DqRuntime:
 
     def register_dataset(self, csv_path: str | Path, metadata: dict[str, Any]) -> str:
         content = Path(csv_path).read_bytes()
-        bundle = self.repository.register_dataset(content, metadata)
+        return self.register_dataset_bytes(content, metadata)
+
+    def register_dataset_bytes(self, csv_content: bytes, metadata: dict[str, Any]) -> str:
+        bundle = self.repository.register_dataset(csv_content, metadata)
         self._log(bundle.version.dataset_version_id, "register_dataset", "success", f"Registered {bundle.dataset.dataset_id}")
         return bundle.version.dataset_version_id
 
