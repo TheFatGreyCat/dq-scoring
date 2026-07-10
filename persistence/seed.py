@@ -9,6 +9,29 @@ from profiling.config import load_config
 from rules_engine.config import load_rules
 from scoring.config import load_scoring_config
 
+DEFAULT_DIMENSION_WEIGHTS = {
+    "Completeness": 1.0,
+    "Validity": 1.0,
+    "Uniqueness": 1.0,
+    "Consistency": 1.0,
+    "Accuracy Proxy": 1.0,
+    "Timeliness": 1.0,
+}
+
+
+def default_scoring_policies(dataset_types: list[str] | None = None) -> list[ScoringPolicy]:
+    types = ["default", *(dataset_types or [])]
+    result: dict[str, ScoringPolicy] = {}
+    for dataset_type in types:
+        policy_id = f"SP-{dataset_type}"
+        result[policy_id] = ScoringPolicy(
+            scoring_policy_id=policy_id,
+            dataset_type=dataset_type,
+            dimension_weights=dict(DEFAULT_DIMENSION_WEIGHTS),
+            quality_gate_pass_threshold=80.0,
+            quality_gate_warning_threshold=65.0,
+        )
+    return list(result.values())
 
 def build_seed_plan(root: str | Path, dataset_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
     base = Path(root)
@@ -17,7 +40,7 @@ def build_seed_plan(root: str | Path, dataset_ids: list[str]) -> dict[str, list[
     columns: list[DatasetColumn] = []
     templates_by_key: dict[tuple[str, str, str, str], RuleTemplate] = {}
     bindings: list[DatasetRuleBinding] = []
-    policies: list[ScoringPolicy] = []
+    policies: list[ScoringPolicy] = default_scoring_policies()
 
     for dataset_id in dataset_ids:
         artifact_name = _artifact_name(dataset_id)
@@ -26,7 +49,7 @@ def build_seed_plan(root: str | Path, dataset_ids: list[str]) -> dict[str, list[
         scoring = load_scoring_config(base / "data" / "scoring" / f"{artifact_name}_scoring.yaml")
         dataset_version_id = f"DV-{config.dataset_id}-legacy"
         datasets.append(DatasetRecord(config.dataset_id, config.dataset_name, config.dataset_type, config.source_type, config.storage_path))
-        versions.append(DatasetVersion(dataset_version_id, config.dataset_id, "legacy", _fingerprint(base / config.storage_path)))
+        versions.append(DatasetVersion(dataset_version_id, config.dataset_id, "legacy", _fingerprint(base / config.storage_path), storage_path=config.storage_path))
         for index, (column_name, spec) in enumerate(config.declared_schema.items(), start=1):
             columns.append(
                 DatasetColumn(

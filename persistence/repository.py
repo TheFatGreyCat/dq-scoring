@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import csv
 import hashlib
@@ -46,15 +46,15 @@ class DqPostgresRepository:
         dataset_name = metadata.get("dataset_name")
         dataset_type = str(metadata.get("dataset_type") or "default")
         source_type = str(metadata.get("source_type") or "csv")
-        storage_path = str(metadata.get("storage_path") or self._persist_csv(dataset_id, csv_content))
         fingerprint = hashlib.sha256(csv_content).hexdigest()
         version_label = str(metadata.get("version_label") or fingerprint[:12])
         dataset_version_id = str(metadata.get("dataset_version_id") or f"DV-{dataset_id}-{fingerprint[:12]}")
+        storage_path = str(metadata.get("storage_path") or self._persist_csv(dataset_id, dataset_version_id, csv_content))
 
         rows, headers = _read_csv_shape(csv_content)
         declared_schema = metadata.get("declared_schema") or {column: {} for column in headers}
         dataset = DatasetRecord(dataset_id, dataset_name, dataset_type, source_type, storage_path)
-        version = DatasetVersion(dataset_version_id, dataset_id, version_label, fingerprint, rows)
+        version = DatasetVersion(dataset_version_id, dataset_id, version_label, fingerprint, rows, storage_path=storage_path)
         columns = [
             DatasetColumn(
                 dataset_version_id=dataset_version_id,
@@ -135,7 +135,7 @@ class DqPostgresRepository:
                 cur.execute(
                     """
                     SELECT d.dataset_id, d.dataset_name, d.dataset_type, d.source_type, d.storage_path, d.created_at,
-                           v.dataset_version_id, v.version_label, v.source_fingerprint, v.row_count, v.created_at
+                           v.dataset_version_id, v.version_label, v.source_fingerprint, v.row_count, v.created_at, v.storage_path
                     FROM dataset_version v
                     JOIN dataset d ON d.dataset_id = v.dataset_id
                     WHERE v.dataset_version_id = %s
@@ -146,7 +146,7 @@ class DqPostgresRepository:
                 if row is None:
                     raise KeyError(f"Unknown dataset_version_id '{dataset_version_id}'")
                 dataset = DatasetRecord(row[0], row[1], row[2], row[3], row[4], str(row[5]))
-                version = DatasetVersion(row[6], row[0], row[7], row[8], row[9], str(row[10]))
+                version = DatasetVersion(row[6], row[0], row[7], row[8], row[9], str(row[10]), row[11])
                 cur.execute(
                     """
                     SELECT dataset_version_id, column_name, ordinal_position, declared_data_type, inferred_data_type,
@@ -372,10 +372,20 @@ class DqPostgresRepository:
         return CanonicalValidationResult(validation_run_id, dataset_version_id, measurements, summaries, issue_samples)
 
 
-    def bootstrap_catalog(self, templates: Iterable[RuleTemplate]) -> dict[str, int]:
+    def bootstrap_catalog(self, templates: Iterable[RuleTemplate], policies: Iterable[ScoringPolicy] | None = None) -> dict[str, int]:
         template_list = list(templates)
+        policy_list = list(policies or [])
         self.save_rule_templates(template_list)
-        return {"rule_template": len(template_list)}
+        if policy_list:
+            self.save_scoring_policies(policy_list)
+        return {"rule_template": len(template_list), "scoring_policy": len(policy_list)}
+
+    def save_scoring_policies(self, policies: Iterable[ScoringPolicy]) -> None:
+        with connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                for policy in policies:
+                    _upsert(cur, "scoring_policy", policy.to_record(), ["scoring_policy_id"])
+            conn.commit()
 
     def save_recommendation_run(self, run: RuleRecommendationRun, recommendations: list[RuleRecommendation]) -> str:
         with connect(self.database_url) as conn:
@@ -461,17 +471,21 @@ class DqPostgresRepository:
     def load_scoring_policy(self, scoring_policy_id: str | None = None, dataset_type: str | None = None) -> ScoringPolicy:
         if scoring_policy_id is None and dataset_type is None:
             raise ValueError("scoring_policy_id or dataset_type is required")
-        sql = "SELECT * FROM scoring_policy WHERE "
-        params: tuple[Any, ...]
-        if scoring_policy_id is not None:
-            sql += "scoring_policy_id = %s"
-            params = (scoring_policy_id,)
-        else:
-            sql += "dataset_type = %s ORDER BY scoring_policy_id LIMIT 1"
-            params = (dataset_type,)
         with connect(self.database_url) as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, params)
+                if scoring_policy_id is not None:
+                    cur.execute("SELECT * FROM scoring_policy WHERE scoring_policy_id = %s", (scoring_policy_id,))
+                else:
+                    cur.execute(
+                        """
+                        SELECT *
+                        FROM scoring_policy
+                        WHERE dataset_type IN (%s, 'default')
+                        ORDER BY CASE WHEN dataset_type = %s THEN 0 ELSE 1 END, scoring_policy_id
+                        LIMIT 1
+                        """,
+                        (dataset_type, dataset_type),
+                    )
                 row = cur.fetchone()
                 if row is None:
                     raise KeyError("No scoring policy found")
@@ -592,9 +606,9 @@ class DqPostgresRepository:
             conn.commit()
         return log.log_id
 
-    def _persist_csv(self, dataset_id: str, csv_content: bytes) -> Path:
-        self.upload_dir.mkdir(parents=True, exist_ok=True)
-        path = self.upload_dir / f"{dataset_id}.csv"
+    def _persist_csv(self, dataset_id: str, dataset_version_id: str, csv_content: bytes) -> Path:
+        path = self.upload_dir / dataset_id / f"{dataset_version_id}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(csv_content)
         return path
 

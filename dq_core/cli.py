@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -28,7 +28,7 @@ def main() -> None:
         command = subparsers.add_parser(name)
         command.add_argument("--dataset-version-id", required=True)
 
-    bindings = subparsers.add_parser("save_recommended_bindings")
+    bindings = subparsers.add_parser("save_recommended_bindings", description="Bind accepted/edited recommendations; optionally auto-bind safe high-confidence recommendations.")
     bindings.add_argument("--dataset-version-id", required=True)
     bindings.add_argument("--accept-all-above-threshold", action="store_true")
     bindings.add_argument("--threshold", type=float, default=0.85)
@@ -107,8 +107,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
