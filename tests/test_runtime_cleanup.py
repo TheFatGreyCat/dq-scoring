@@ -14,6 +14,7 @@ class RuntimeCleanupTests(unittest.TestCase):
         command_text = "\n".join(V2_SETUP_COMMANDS)
 
         self.assertEqual(V2_SETUP_COMMANDS[0], "python -m persistence.db migrate")
+        self.assertIn("python -m dq_core.cli bootstrap_catalog", command_text)
         self.assertIn("python -m dq_core.cli register_dataset", command_text)
         self.assertIn("python -m dq_core.cli save_recommended_bindings", command_text)
         self.assertIn("python -m dq_core.cli calculate_score", command_text)

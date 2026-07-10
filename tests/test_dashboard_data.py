@@ -1,9 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
 
-from dashboard.data import aggregate_latest_status_counts, dataset_dashboard_rows, dataset_runs, latest_dataset_scores, load_dashboard_frames, run_details, score_summary_metrics
+from dashboard.data import _mask_sensitive_value, aggregate_latest_status_counts, dataset_dashboard_rows, dataset_runs, latest_dataset_scores, load_dashboard_frames, run_details, score_summary_metrics
 
 
 class FakeRepository:
@@ -84,14 +84,19 @@ class DashboardDataTests(unittest.TestCase):
         self.assertEqual(details["profile_evidence"].iloc[0]["top_values"][0]["value"], "00***")
         self.assertEqual(details["profile_evidence"].iloc[0]["miscast_examples"][0], "AB***")
 
+    def test_mask_sensitive_value_masks_nested_dashboard_exports(self) -> None:
+        value = {
+            "record_key": "row-12345",
+            "actual_value": ["", "A", "AB", "ABCDE", {"nested": "secret"}],
+            "count": 3,
+        }
+
+        masked = _mask_sensitive_value(value)
+
+        self.assertEqual(masked["record_key"], "ro***")
+        self.assertEqual(masked["actual_value"], ["<empty>", "***", "***", "AB***", {"nested": "se***"}])
+        self.assertEqual(masked["count"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
-
-
-
-
-
-

@@ -7,8 +7,8 @@ import pandas as pd
 from dq_core.models import CanonicalValidationResult, DatasetRuleBinding, MeasurementResult, RecordMeasurementSummary, RuleTemplate, ScoringPolicy
 from profiling.column_profile import profile_columns
 from profiling.models import DatasetConfig, ProfilingConfig
-from profiling.sampling import sample_dataset
-from scoring.v2 import calculate_scores
+from profiling.sampling import FULL_SCAN_ROW_LIMIT, FULL_SCAN_SIZE_LIMIT_BYTES, WIDE_DATASET_COLUMN_LIMIT, sample_dataset
+from scoring.v2 import _score_status, calculate_scores
 
 
 class ProfilingSamplingScoringTests(unittest.TestCase):
@@ -114,6 +114,16 @@ class ProfilingSamplingScoringTests(unittest.TestCase):
         self.assertIsNone(result.dataset_score.dataset_dq_score)
 
 
+    def test_documented_dataset_size_limits_match_runtime_defaults(self) -> None:
+        self.assertEqual(FULL_SCAN_ROW_LIMIT, 100_000)
+        self.assertEqual(FULL_SCAN_SIZE_LIMIT_BYTES, 100 * 1024 * 1024)
+        self.assertEqual(WIDE_DATASET_COLUMN_LIMIT, 200)
+
+    def test_score_status_coverage_boundaries_are_inclusive(self) -> None:
+        self.assertEqual(_score_status(0.67), "final")
+        self.assertEqual(_score_status(0.669999), "provisional")
+        self.assertEqual(_score_status(0.33), "provisional")
+        self.assertEqual(_score_status(0.329999), "insufficient_coverage")
+
 if __name__ == "__main__":
     unittest.main()
-

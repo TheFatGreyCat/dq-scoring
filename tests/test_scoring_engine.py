@@ -106,6 +106,40 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(first.version.storage_path.endswith("DV-orders-v1.csv"))
         self.assertTrue(second.version.storage_path.endswith("DV-orders-v2.csv"))
 
+
+    def test_register_dataset_bytes_delegates_versioned_storage_to_repository(self) -> None:
+        class CaptureRepository(DqPostgresRepository):
+            def __init__(self, upload_dir: Path) -> None:
+                super().__init__(upload_dir=upload_dir)
+                self.saved_bundle = None
+                self.received_metadata = None
+                self.logs = []
+
+            def register_dataset(self, csv_content, metadata):
+                self.received_metadata = dict(metadata)
+                return super().register_dataset(csv_content, metadata)
+
+            def save_dataset_bundle(self, dataset, version, columns):
+                self.saved_bundle = DatasetBundle(dataset, version, columns)
+
+            def save_pipeline_log(self, log: PipelineLog):
+                self.logs.append(log.to_record())
+                return log.log_id
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = CaptureRepository(Path(tempdir))
+            runtime = DqRuntime(repo)
+            dataset_version_id = runtime.register_dataset_bytes(
+                b"id,email\n1,a@example.com\n",
+                {"dataset_id": "orders", "dataset_version_id": "DV-orders-runtime", "primary_key": ["id"]},
+            )
+
+            self.assertEqual(dataset_version_id, "DV-orders-runtime")
+            self.assertNotIn("storage_path", repo.received_metadata)
+            self.assertEqual(repo.saved_bundle.version.storage_path, str(Path(tempdir) / "orders" / "DV-orders-runtime.csv"))
+            self.assertTrue(Path(repo.saved_bundle.version.storage_path).exists())
+            self.assertEqual(repo.logs[0]["event_type"], "register_dataset")
+
     def test_bootstrap_catalog_seeds_default_scoring_policy(self) -> None:
         runtime = DqRuntime(FakeRepository())
 
