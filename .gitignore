@@ -12,3 +12,4 @@ data/rules_store/*.json
 data/score_store/*.db
 data/score_store/*.json
 temp
+data/uploads/
