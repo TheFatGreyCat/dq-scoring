@@ -1,5 +1,6 @@
-pandas>=2.0
-great_expectations>=0.18
-psycopg[binary]>=3.2
-PyYAML>=6.0
-streamlit>=1.36
+pandas==3.0.3
+great_expectations==1.18.1
+psycopg[binary]==3.3.4
+PyYAML==6.0.3
+streamlit==1.58.0
+pytest==9.1.1
