@@ -1,6 +1,5 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -34,22 +33,10 @@ def import_legacy(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Import legacy demo metadata into DQ Scoring V2 PostgreSQL contracts")
-    parser.add_argument("--root", default=".", help="Repository root")
-    parser.add_argument("--dataset", action="append", dest="datasets", help="Dataset id to import; repeatable")
-    parser.add_argument("--dry-run", action="store_true", help="Build and report import plan without writing")
-    parser.add_argument("--reset", action="store_true", help="Reset V2 tables before importing")
-    parser.add_argument("--report", help="Write import report JSON")
-    args = parser.parse_args()
-
-    report = import_legacy(root=args.root, datasets=args.datasets, dry_run=args.dry_run, reset=args.reset)
-    output = json.dumps(report, ensure_ascii=False, indent=2)
-    if args.report:
-        path = Path(args.report)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(output, encoding="utf-8")
-    print(output)
-
+    raise SystemExit(
+        "persistence.import_legacy is no longer a runtime command. "
+        "Use python -m persistence.db migrate and register datasets through dq_core.cli or the dashboard."
+    )
 
 def _report(plan: dict[str, list[dict[str, Any]]], datasets: list[str]) -> dict[str, Any]:
     bindings = plan.get("dataset_rule_binding", [])
@@ -82,3 +69,5 @@ def _report(plan: dict[str, list[dict[str, Any]]], datasets: list[str]) -> dict[
 
 if __name__ == "__main__":
     main()
+
+

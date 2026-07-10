@@ -17,6 +17,8 @@ from dq_core.models import (
     MeasurementResult,
     PipelineLog,
     RecordMeasurementSummary,
+    RuleRecommendation,
+    RuleRecommendationRun,
     RuleTemplate,
     ScoringPolicy,
 )
@@ -172,6 +174,43 @@ class DqPostgresRepository:
                     """,
                     (result.profiling_run.run_id, dataset_version_id, result.profiling_run.status),
                 )
+                cur.execute(
+                    """
+                    UPDATE profiling_run
+                    SET scan_mode = %s,
+                        sample_method = %s,
+                        sample_ratio = %s,
+                        random_seed = %s,
+                        coverage_estimate = %s,
+                        profile_confidence = %s,
+                        chunk_size = %s,
+                        memory_budget_mb = %s,
+                        time_budget_sec = %s,
+                        budget_used = %s,
+                        skipped_metrics = %s,
+                        termination_reason = %s,
+                        deep_profiled_columns = %s,
+                        profile_strategy = %s
+                    WHERE profiling_run_id = %s
+                    """,
+                    (
+                        result.profiling_run.scan_mode,
+                        result.profiling_run.sample_method,
+                        result.profiling_run.sample_ratio,
+                        result.profiling_run.random_seed,
+                        result.profiling_run.coverage_estimate,
+                        result.profiling_run.profile_confidence,
+                        result.profiling_run.chunk_size,
+                        result.profiling_run.memory_budget_mb,
+                        result.profiling_run.time_budget_sec,
+                        _encode("budget_used", result.profiling_run.budget_used),
+                        result.profiling_run.skipped_metrics,
+                        result.profiling_run.termination_reason,
+                        result.profiling_run.deep_profiled_columns,
+                        result.profiling_run.profile_strategy,
+                        result.profiling_run.run_id,
+                    ),
+                )
                 _upsert(
                     cur,
                     "dataset_profile",
@@ -196,6 +235,12 @@ class DqPostgresRepository:
                             "metric_value": metric.metric_value,
                             "metric_source": metric.metric_source,
                             "gx_expectation_type": metric.gx_expectation_type,
+                            "metric_scope": metric.metric_scope,
+                            "is_approximate": metric.is_approximate,
+                            "sample_size": metric.sample_size,
+                            "sample_ratio": metric.sample_ratio,
+                            "random_seed": metric.random_seed,
+                            "coverage_estimate": metric.coverage_estimate,
                             "collected_at": metric.collected_at,
                         },
                         ["profiling_run_id", "column_name", "metric_name", "metric_source"],
@@ -266,6 +311,28 @@ class DqPostgresRepository:
                     _upsert(cur, "measurement_result", record, ["measurement_result_id"])
                 for summary in validation.record_summaries:
                     _upsert(cur, "record_measurement_summary", summary.to_record(), ["measurement_result_id"])
+                for sample in validation.issue_samples:
+                    record = sample.to_record()
+                    cur.execute(
+                        """
+                        INSERT INTO rule_issue_sample (
+                            validation_run_id, binding_id, record_key, target_column,
+                            actual_value, expected_condition, issue_type, rule_code, sampled_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            record["validation_run_id"],
+                            record["binding_id"],
+                            record.get("record_key"),
+                            record.get("target_column"),
+                            record.get("actual_value"),
+                            record.get("expected_condition"),
+                            record.get("issue_type"),
+                            record.get("rule_code"),
+                            record.get("sampled_at"),
+                        ),
+                    )
             conn.commit()
         return validation.validation_run_id
 
@@ -298,8 +365,99 @@ class DqPostgresRepository:
                 )
                 columns = [desc.name for desc in cur.description]
                 summaries = [RecordMeasurementSummary(**_rowdict(columns, item)) for item in cur.fetchall()]
-        return CanonicalValidationResult(validation_run_id, dataset_version_id, measurements, summaries)
+                cur.execute("SELECT * FROM rule_issue_sample WHERE validation_run_id = %s", (validation_run_id,))
+                columns = [desc.name for desc in cur.description]
+                from dq_core.models import ValidationIssueSample
+                issue_samples = [ValidationIssueSample(**_rowdict(columns, item)) for item in cur.fetchall()]
+        return CanonicalValidationResult(validation_run_id, dataset_version_id, measurements, summaries, issue_samples)
 
+
+    def bootstrap_catalog(self, templates: Iterable[RuleTemplate]) -> dict[str, int]:
+        template_list = list(templates)
+        self.save_rule_templates(template_list)
+        return {"rule_template": len(template_list)}
+
+    def save_recommendation_run(self, run: RuleRecommendationRun, recommendations: list[RuleRecommendation]) -> str:
+        with connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                _upsert(cur, "rule_recommendation_run", run.to_record(), ["recommendation_run_id"])
+                for item in recommendations:
+                    record = {
+                        "recommendation_id": item.recommendation_id,
+                        "recommendation_run_id": item.recommendation_run_id or run.recommendation_run_id,
+                        "column_id": item.target_columns[0] if item.target_columns else None,
+                        "rule_template_id": item.rule_template_id,
+                        "target_columns": item.target_columns,
+                        "candidate_score": item.candidate_score if item.candidate_score is not None else item.confidence,
+                        "score_components_jsonb": item.score_components,
+                        "reason_jsonb": item.reason_json,
+                        "reason": item.reason,
+                        "rank": item.rank or 0,
+                        "score_margin": item.score_margin,
+                        "ambiguity_status": item.ambiguity_status,
+                        "decision": item.review_status,
+                        "suggested_parameters_jsonb": item.suggested_parameters,
+                        "warnings": item.warnings,
+                        "source": item.source,
+                        "editable": item.editable,
+                    }
+                    _upsert(cur, "rule_recommendation_result", record, ["recommendation_id"])
+            conn.commit()
+        return run.recommendation_run_id
+
+    def load_latest_recommendations(self, dataset_version_id: str, decision: str | None = None) -> list[RuleRecommendation]:
+        with connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT recommendation_run_id
+                    FROM rule_recommendation_run
+                    WHERE dataset_version_id = %s
+                    ORDER BY COALESCE(completed_at, started_at) DESC, recommendation_run_id DESC
+                    LIMIT 1
+                    """,
+                    (dataset_version_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return []
+                run_id = row[0]
+                sql = "SELECT * FROM rule_recommendation_result WHERE recommendation_run_id = %s"
+                params: list[Any] = [run_id]
+                if decision is not None:
+                    sql += " AND decision = %s"
+                    params.append(decision)
+                sql += " ORDER BY column_id, rank, candidate_score DESC"
+                cur.execute(sql, params)
+                columns = [desc.name for desc in cur.description]
+                rows = [_rowdict(columns, item) for item in cur.fetchall()]
+        return [_recommendation_from_row(row) for row in rows]
+
+    def review_recommendation(self, recommendation_id: str, decision: str, suggested_parameters: dict[str, Any] | None = None) -> str:
+        if decision not in {"accepted", "rejected", "edited", "suggested"}:
+            raise ValueError(f"Unsupported recommendation decision '{decision}'")
+        with connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                if suggested_parameters is None:
+                    cur.execute(
+                        """
+                        UPDATE rule_recommendation_result
+                        SET decision = %s, reviewed_at = now()
+                        WHERE recommendation_id = %s
+                        """,
+                        (decision, recommendation_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE rule_recommendation_result
+                        SET decision = %s, suggested_parameters_jsonb = %s, reviewed_at = now()
+                        WHERE recommendation_id = %s
+                        """,
+                        (decision, _encode("suggested_parameters_jsonb", suggested_parameters), recommendation_id),
+                    )
+            conn.commit()
+        return recommendation_id
     def load_scoring_policy(self, scoring_policy_id: str | None = None, dataset_type: str | None = None) -> ScoringPolicy:
         if scoring_policy_id is None and dataset_type is None:
             raise ValueError("scoring_policy_id or dataset_type is required")
@@ -332,6 +490,9 @@ class DqPostgresRepository:
                         "scoring_policy_id": result.scoring_policy_id,
                         "dataset_version_id": dataset_version_id,
                         "status": "success",
+                        "policy_snapshot_jsonb": result.policy_snapshot,
+                        "formula_revision": result.formula_revision,
+                        "validation_scope": result.validation_scope,
                     },
                     ["score_run_id"],
                 )
@@ -350,6 +511,12 @@ class DqPostgresRepository:
                             "severity_weight": score.severity_weight,
                             "criticality_weight": score.criticality_weight,
                             "effective_weight": score.effective_weight,
+                            "evaluated_count": score.evaluated_count,
+                            "conflict_group": score.conflict_group,
+                            "primary_scoring_rule": score.primary_scoring_rule,
+                            "score_enabled": score.score_enabled,
+                            "measurement_status_reason": score.measurement_status_reason,
+                            "contribution": score.contribution,
                             "explanation_jsonb": score.explanation,
                         },
                         ["score_run_id", "binding_id"],
@@ -378,12 +545,18 @@ class DqPostgresRepository:
                         "measured_dimensions": result.dataset_score.measured_dimensions,
                         "excluded_dimensions": result.dataset_score.excluded_dimensions,
                         "gate_failures": result.dataset_score.gate_failures,
+                        "measurement_coverage": result.dataset_score.measurement_coverage,
+                        "measured_dimension_count": result.dataset_score.measured_dimension_count,
+                        "total_dimension_count": result.dataset_score.total_dimension_count,
+                        "score_status": result.dataset_score.score_status,
+                        "validation_scope": result.dataset_score.validation_scope,
+                        "policy_snapshot_jsonb": result.dataset_score.policy_snapshot,
+                        "formula_revision": result.dataset_score.formula_revision,
                     },
                     ["score_run_id"],
                 )
             conn.commit()
         return result.score_run_id
-
     def list_dashboard_rows(self) -> dict[str, list[dict[str, Any]]]:
         tables = [
             "dataset",
@@ -396,6 +569,11 @@ class DqPostgresRepository:
             "dataset_rule_binding",
             "rule_template",
             "rule_issue_sample",
+            "profiling_run",
+            "dataset_profile",
+            "column_profile",
+            "rule_recommendation_run",
+            "rule_recommendation_result",
             "pipeline_log",
         ]
         result: dict[str, list[dict[str, Any]]] = {}
@@ -464,7 +642,7 @@ def _upsert(cur: Any, table: str, record: dict[str, Any], key_columns: list[str]
 
 
 def _encode(column: str, value: Any) -> Any:
-    if column in {"target_columns", "measured_dimensions", "excluded_dimensions"}:
+    if column in {"target_columns", "required_columns", "backend_support", "warnings", "skipped_metrics", "deep_profiled_columns", "measured_dimensions", "excluded_dimensions"}:
         return value
     if column.endswith("jsonb") or column in {
         "applicability",
@@ -477,6 +655,14 @@ def _encode(column: str, value: Any) -> Any:
         "metric_value",
         "context",
         "gate_failures",
+        "exclusions",
+        "parameters_schema",
+        "recommendation_metadata",
+        "score_components_jsonb",
+        "reason_jsonb",
+        "suggested_parameters_jsonb",
+        "expected_jsonb",
+        "budget_used",
     }:
         try:
             from psycopg.types.json import Jsonb
@@ -490,3 +676,32 @@ def _rowdict(columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
     return {column: value for column, value in zip(columns, row)}
 
 
+
+
+
+
+
+
+
+
+
+def _recommendation_from_row(row: dict[str, Any]) -> RuleRecommendation:
+    return RuleRecommendation(
+        rule_template_id=row["rule_template_id"],
+        target_columns=list(row.get("target_columns") or []),
+        reason=row.get("reason") or "",
+        confidence=float(row.get("candidate_score") or 0.0),
+        editable=bool(row.get("editable", True)),
+        source=row.get("source") or "framework_auto",
+        recommendation_id=row.get("recommendation_id"),
+        recommendation_run_id=row.get("recommendation_run_id"),
+        candidate_score=row.get("candidate_score"),
+        score_components=row.get("score_components_jsonb") or {},
+        reason_json=row.get("reason_jsonb") or {},
+        rank=row.get("rank"),
+        score_margin=row.get("score_margin"),
+        ambiguity_status=row.get("ambiguity_status") or "clear",
+        review_status=row.get("decision") or "suggested",
+        suggested_parameters=row.get("suggested_parameters_jsonb") or {},
+        warnings=list(row.get("warnings") or []),
+    )
