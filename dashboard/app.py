@@ -6,36 +6,15 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dashboard.data import (  # noqa: E402
-    DEFAULT_RULE_STORE_PATH,
-    DEFAULT_SCORE_STORE_PATH,
-    aggregate_latest_status_counts,
-    dataset_runs,
-    latest_dataset_scores,
-    load_dashboard_frames,
-    run_details,
-    score_summary_metrics,
-)
-from dashboard.onboarding import (  # noqa: E402
-    DATASET_TYPES,
-    SUPPORTED_TYPES,
-    artifact_summary,
-    default_cde_fields,
-    default_mandatory_fields,
-    infer_schema,
-    load_csv_bytes,
-    persist_onboarding_artifacts,
-    rows_to_schema,
-    sanitize_dataset_id,
-    schema_to_rows,
-    to_json_text,
-)
-from scoring.run import run_scoring  # noqa: E402
+from dashboard.data import dataset_dashboard_rows, dataset_runs, latest_dataset_scores, load_dashboard_frames, run_details, score_summary_metrics  # noqa: E402
+from dashboard.onboarding import infer_schema, load_csv_bytes, rows_to_schema, sanitize_dataset_id, schema_to_rows  # noqa: E402
+from dq_core.health import get_system_health  # noqa: E402
+from dq_core.runtime import DqRuntime  # noqa: E402
+from persistence.repository import DqPostgresRepository  # noqa: E402
 
 
 STATUS_COLORS = {
@@ -47,205 +26,261 @@ STATUS_COLORS = {
 }
 
 
+V2_SETUP_COMMANDS = [
+    "python -m persistence.db migrate",
+    "python -m dq_core.cli bootstrap_catalog",
+    "python -m dq_core.cli register_dataset --csv data/samples/customer_master.csv --dataset-id customer_master --dataset-type customer",
+    "python -m dq_core.cli profile_dataset --dataset-version-id <dataset_version_id>",
+    "python -m dq_core.cli recommend_rules --dataset-version-id <dataset_version_id>",
+    "python -m dq_core.cli review_recommendation --recommendation-id <recommendation_id> --decision accepted",
+    "python -m dq_core.cli save_recommended_bindings --dataset-version-id <dataset_version_id>",
+    "python -m dq_core.cli run_validation --dataset-version-id <dataset_version_id>",
+    "python -m dq_core.cli calculate_score --validation-run-id <validation_run_id>",
+]
+
+
 def main() -> None:
     st.set_page_config(page_title="DQ Score Dashboard", layout="wide")
     _inject_styles()
-
     st.title("DQ Score Dashboard")
-    st.caption("Phase 1 DQ Core Score across sample datasets")
+    repository = DqPostgresRepository()
+    runtime = DqRuntime(repository)
 
-    score_store, rule_store = _store_inputs()
-    frames = load_dashboard_frames(score_store, rule_store)
-    latest = latest_dataset_scores(frames)
-
-    dashboard_tab, add_dataset_tab = st.tabs(["Dashboard", "Add Dataset"])
+    dashboard_tab, onboarding_tab, catalog_tab, health_tab, logs_tab = st.tabs(["Dashboard", "Onboard", "Catalog", "System Health", "Logs"])
     with dashboard_tab:
-        _render_dashboard(latest, frames)
-    with add_dataset_tab:
-        _render_add_dataset(score_store, rule_store)
+        _render_dashboard()
+    with onboarding_tab:
+        _render_onboarding(runtime)
+    with catalog_tab:
+        _render_catalog(runtime)
+    with health_tab:
+        _render_health()
+    with logs_tab:
+        _render_logs(runtime)
 
 
-def _render_dashboard(latest: pd.DataFrame, frames) -> None:
+def _render_dashboard() -> None:
+    frames = load_dashboard_frames()
+    latest = latest_dataset_scores(frames)
     if latest.empty:
-        st.warning("No score history found. Run the demo data generator first.")
-        st.code(r".\.venv\Scripts\python.exe dashboard\generate_demo_data.py --datasets all", language="powershell")
+        st.warning("No score history found. Register a dataset, run validation, then calculate a score.")
+        st.code("\n".join(V2_SETUP_COMMANDS), language="powershell")
         return
 
-    _render_overview(latest, frames)
+    st.subheader("Overview")
+    cols = st.columns(3)
+    cols[0].metric("Datasets", len(latest))
+    cols[1].metric("Average DQ Score", _score_text(latest["dq_core_score"].dropna().mean()))
+    cols[2].metric("Failing Gates", int(latest["quality_gate_status"].eq("fail").sum()))
+    overview = pd.DataFrame(
+        [
+            {
+                "dataset_id": row.dataset_id,
+                "dataset_name": row.dataset_name,
+                "dataset_version_id": row.dataset_version_id,
+                "dq_score": _round_score(row.dq_score),
+                "quality_gate_status": row.quality_gate_status,
+                "score_status": row.score_status,
+                "last_run_at": row.last_run_at,
+            }
+            for row in dataset_dashboard_rows(frames)
+        ]
+    )
+    st.dataframe(overview, use_container_width=True, hide_index=True)
 
-    dataset_id = _dataset_selector(latest)
+    dataset_id = st.sidebar.selectbox("Dataset", latest["dataset_id"].sort_values().tolist())
     runs = dataset_runs(frames, dataset_id)
-    selected_run_id = _run_selector(runs)
-    details = run_details(frames, selected_run_id)
-
-    st.divider()
+    run_id = st.sidebar.selectbox("Score Run", runs["run_id"].tolist())
+    details = run_details(frames, run_id)
     _render_dataset_detail(dataset_id, details)
-    st.divider()
-    _render_trend(dataset_id, runs)
-    st.divider()
-    _render_methodology()
 
 
-def _render_add_dataset(score_store: Path, rule_store: Path) -> None:
-    st.subheader("Add Dataset")
-    last_summary = st.session_state.pop("onboarding_summary", None)
-    if last_summary:
-        st.success("Dataset config created and scoring completed.")
-        st.json(last_summary)
-
+def _render_onboarding(runtime: DqRuntime) -> None:
+    st.subheader("Dataset Onboarding")
     uploaded = st.file_uploader("CSV dataset", type=["csv"])
     if uploaded is None:
-        st.info("Upload a CSV file to infer schema and generate a first-pass DQ config.")
         return
-
-    try:
-        csv_content = uploaded.getvalue()
-        dataframe = load_csv_bytes(csv_content)
-    except Exception as exc:
-        st.error(f"Cannot read uploaded CSV: {exc}")
-        return
-
-    default_dataset_id = sanitize_dataset_id(Path(uploaded.name).stem)
-    dataset_id = st.text_input("Dataset ID", value=default_dataset_id)
+    csv_content = uploaded.getvalue()
+    dataframe = load_csv_bytes(csv_content)
+    dataset_id = sanitize_dataset_id(st.text_input("Dataset ID", value=Path(uploaded.name).stem))
     dataset_name = st.text_input("Dataset name", value=Path(uploaded.name).stem.replace("_", " ").title())
-    dataset_type = st.selectbox("Dataset type", DATASET_TYPES, index=0)
-
-    st.markdown("### Preview")
-    preview_cols = st.columns(3)
-    preview_cols[0].metric("Rows", len(dataframe))
-    preview_cols[1].metric("Columns", len(dataframe.columns))
-    preview_cols[2].metric("File", uploaded.name)
+    dataset_type = st.text_input("Dataset type", value="default")
     st.dataframe(dataframe.head(20), use_container_width=True)
 
-    inferred_schema = infer_schema(dataframe)
-    schema_rows = schema_to_rows(inferred_schema)
-    st.markdown("### Schema")
-    edited_schema = st.data_editor(
-        schema_rows,
-        use_container_width=True,
-        hide_index=True,
-        disabled=["column_name"],
-        column_config={
-            "column_name": "Column",
-            "data_type": st.column_config.SelectboxColumn("Data Type", options=SUPPORTED_TYPES, required=True),
-            "nullable": st.column_config.CheckboxColumn("Nullable"),
-        },
-    )
-    edited_schema_rows = _schema_editor_rows(edited_schema)
-
+    schema_rows = schema_to_rows(infer_schema(dataframe))
+    edited_schema = st.data_editor(schema_rows, use_container_width=True, hide_index=True, disabled=["column_name"])
+    edited_schema_rows = edited_schema.to_dict(orient="records") if hasattr(edited_schema, "to_dict") else [dict(row) for row in edited_schema]
     columns = [str(column) for column in dataframe.columns]
-    inferred_mandatory = default_mandatory_fields(dataframe)
-    primary_key = st.multiselect("Primary key columns", columns, default=_default_key_columns(columns))
-    business_key = st.multiselect("Business key columns", columns, default=[] if primary_key else _default_key_columns(columns))
-    mandatory_fields = st.multiselect("Mandatory fields", columns, default=inferred_mandatory)
-    cde_fields = st.multiselect("CDE fields", columns, default=default_cde_fields(dataframe, mandatory_fields))
-    datetime_columns = [
-        row["column_name"]
-        for row in edited_schema_rows
-        if row.get("data_type") == "datetime" and row.get("column_name") in columns
-    ]
-    timestamp_options = [""] + datetime_columns
-    timestamp_column = st.selectbox("Timestamp column", timestamp_options, format_func=lambda value: value or "None")
-    max_freshness_lag_hours = None
-    if timestamp_column:
-        max_freshness_lag_hours = st.number_input("Max freshness lag hours", min_value=1, value=24, step=1)
+    primary_key = st.multiselect("Primary key", columns, default=_default_key_columns(columns))
+    business_key = st.multiselect("Business key", columns, default=[])
+    mandatory_fields = st.multiselect("Mandatory fields", columns, default=primary_key)
+    cde_fields = st.multiselect("CDE fields", columns, default=[])
+    timestamp_column = st.selectbox("Timestamp column", [""] + columns)
 
-    run_scoring_now = st.checkbox("Run scoring after creating config", value=True)
-    if st.button("Create Dataset Config", type="primary"):
-        try:
-            normalized_dataset_id = sanitize_dataset_id(dataset_id)
-            declared_schema = rows_to_schema(edited_schema_rows)
-            artifacts = persist_onboarding_artifacts(
-                root=ROOT,
-                dataset_id=normalized_dataset_id,
-                dataset_name=dataset_name,
-                dataset_type=dataset_type,
-                csv_content=csv_content,
-                declared_schema=declared_schema,
-                primary_key=primary_key,
-                business_key=business_key,
-                mandatory_fields=mandatory_fields,
-                cde_fields=cde_fields,
-                timestamp_column=timestamp_column or None,
-                max_freshness_lag_hours=int(max_freshness_lag_hours) if max_freshness_lag_hours else None,
-            )
-            summary: dict[str, object] = {"artifacts": artifact_summary(artifacts)}
-            if run_scoring_now:
-                result = run_scoring(
-                    str(artifacts.dataset_config_path),
-                    str(artifacts.rules_config_path),
-                    str(artifacts.scoring_config_path),
-                    str(rule_store),
-                    str(score_store),
-                )
-                export_path = ROOT / "data" / "score_store" / f"{normalized_dataset_id}_score.json"
-                export_path.parent.mkdir(parents=True, exist_ok=True)
-                export_path.write_text(to_json_text(result.to_artifact()), encoding="utf-8")
-                summary["scoring"] = result.to_summary(str(score_store))
-                summary["export_json"] = str(export_path)
-            st.session_state["onboarding_summary"] = summary
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Dataset onboarding failed: {exc}")
+    run_now = st.checkbox("Run baseline after register", value=True)
+    if st.button("Register Dataset", type="primary"):
+        metadata = {
+            "dataset_id": dataset_id,
+            "dataset_name": dataset_name,
+            "dataset_type": dataset_type,
+            "declared_schema": rows_to_schema(edited_schema_rows),
+            "primary_key": primary_key,
+            "business_key": business_key,
+            "mandatory_fields": mandatory_fields,
+            "cde_fields": cde_fields,
+            "timestamp_column": timestamp_column or None,
+        }
+        dataset_version_id = runtime.register_dataset_bytes(csv_content, metadata)
+        summary = {"dataset_version_id": dataset_version_id}
+        if run_now:
+            summary["profiling_run_id"] = runtime.profile_dataset(dataset_version_id)
+            summary["binding_run_id"] = runtime.save_recommended_rule_bindings(dataset_version_id, accept_all_above_threshold=True)
+            validation_run_id = runtime.run_validation(dataset_version_id)
+            summary["validation_run_id"] = validation_run_id
+            summary["score_run_id"] = runtime.calculate_score(validation_run_id)
+        st.success("V2 onboarding completed")
+        st.json(summary)
 
 
-def _store_inputs() -> tuple[Path, Path]:
-    with st.sidebar:
-        st.header("Data Stores")
-        score_store = Path(
-            st.text_input("Score store", value=str(DEFAULT_SCORE_STORE_PATH), help="SQLite database with score history")
-        )
-        rule_store = Path(
-            st.text_input("Rules store", value=str(DEFAULT_RULE_STORE_PATH), help="SQLite database with rule results")
-        )
-    return score_store, rule_store
 
+def _render_catalog(runtime: DqRuntime) -> None:
+    st.subheader("Rule Catalog")
+    try:
+        inventory = runtime.catalog_inventory()
+    except Exception as exc:
+        st.warning(f"Cannot load catalog inventory: {exc}")
+        return
+    rules = pd.DataFrame(inventory.get("rules", []))
+    coverage = pd.DataFrame(inventory.get("backend_coverage", []))
+    issues = pd.DataFrame(inventory.get("issues", []))
+    cols = st.columns(3)
+    cols[0].metric("Rules", len(rules))
+    cols[1].metric("Families", rules["family"].nunique() if "family" in rules.columns and not rules.empty else 0)
+    cols[2].metric("Catalog Issues", len(issues))
+    st.markdown("### Inventory")
+    st.dataframe(rules, hide_index=True, use_container_width=True)
+    st.markdown("### Backend Coverage")
+    st.dataframe(coverage, hide_index=True, use_container_width=True)
+    if not issues.empty:
+        st.markdown("### Catalog Issues")
+        st.dataframe(issues, hide_index=True, use_container_width=True)
 
-def _render_overview(latest: pd.DataFrame, frames) -> None:
-    st.subheader("Overview")
-    counts = aggregate_latest_status_counts(frames)
-    total_datasets = len(latest)
-    avg_score = latest["dq_core_score"].dropna().mean() if "dq_core_score" in latest else None
-
+def _render_health() -> None:
+    health = get_system_health()
+    st.subheader("System Health")
     cols = st.columns(4)
-    cols[0].metric("Datasets", total_datasets)
-    cols[1].metric("Average DQ Core", _score_text(avg_score))
-    cols[2].metric("Passing", counts.get("pass", 0))
-    cols[3].metric("Warning / Fail", counts.get("warning", 0) + counts.get("fail", 0))
+    cols[0].metric("PostgreSQL", health["postgresql"]["status"])
+    cols[1].metric("Schema", health["schema"]["status"])
+    cols[2].metric("Rule Catalog", health["rule_catalog"]["status"])
+    cols[3].metric("Local LLM", health["local_llm"]["status"])
 
-    overview = latest[
-        [
-            "dataset_id",
-            "dq_core_score",
-            "quality_gate_status",
-            "total_records",
-            "rules_total",
-            "rules_failed",
-            "run_timestamp",
-        ]
-    ].copy()
-    overview["dq_core_score"] = overview["dq_core_score"].map(_round_score)
-    st.dataframe(
-        overview,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "dataset_id": "Dataset",
-            "dq_core_score": st.column_config.NumberColumn("DQ Core", format="%.2f"),
-            "quality_gate_status": "Gate",
-            "total_records": st.column_config.NumberColumn("Records", format="%d"),
-            "rules_total": st.column_config.NumberColumn("Rules", format="%d"),
-            "rules_failed": st.column_config.NumberColumn("Failed Rules", format="%d"),
-            "run_timestamp": st.column_config.DatetimeColumn("Latest Run"),
-        },
-    )
+    rows = [
+        {"component": "PostgreSQL", "key": "database", "value": health["postgresql"]["database"]},
+        {"component": "PostgreSQL", "key": "host", "value": health["postgresql"]["host"]},
+        {"component": "Schema", "key": "migration_table", "value": health["schema"]["migration_table"]},
+        {"component": "Schema", "key": "latest_migration", "value": health["schema"]["latest_migration"]},
+        {"component": "Schema", "key": "migration_count", "value": health["schema"]["migration_count"]},
+        {"component": "Rule Catalog", "key": "template_count", "value": health["rule_catalog"]["template_count"]},
+        {"component": "Runtime Storage", "key": "path", "value": health["runtime_storage"]["path"]},
+        {"component": "Runtime Storage", "key": "writable", "value": health["runtime_storage"]["writable"]},
+    ]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    if health["postgresql"].get("error"):
+        st.warning(health["postgresql"]["error"])
 
 
-def _dataset_selector(latest: pd.DataFrame) -> str:
-    dataset_ids = latest["dataset_id"].sort_values().tolist()
-    with st.sidebar:
-        st.header("Dataset")
-        return st.selectbox("Dataset", dataset_ids)
+def _render_logs(runtime: DqRuntime) -> None:
+    try:
+        logs = pd.DataFrame(runtime.get_pipeline_logs())
+    except Exception as exc:
+        st.warning(f"Cannot load pipeline logs: {exc}")
+        return
+    if logs.empty:
+        st.info("No pipeline logs yet.")
+        return
+    st.dataframe(logs.sort_values("created_at", ascending=False), use_container_width=True, hide_index=True)
+
+
+def _render_dataset_detail(dataset_id: str, details: dict) -> None:
+    st.subheader(f"Dataset Detail: {dataset_id}")
+    metrics = score_summary_metrics(details["dataset_score"])
+    cols = st.columns(5)
+    cols[0].metric("DQ Score", _score_text(metrics["dq_core_score"]))
+    cols[1].markdown(_status_badge(str(metrics["quality_gate_status"])), unsafe_allow_html=True)
+    cols[2].metric("Coverage", _coverage_text(metrics.get("measurement_coverage")))
+    cols[3].metric("Rules", metrics["rules_total"])
+    cols[4].metric("Failed Rules", metrics["rules_failed"])
+
+    dim_col, rule_col = st.columns([1, 1.4])
+    with dim_col:
+        st.markdown("### Dimensions")
+        st.dataframe(details["dimensions"], hide_index=True, use_container_width=True)
+    with rule_col:
+        st.markdown("### Rules")
+        st.dataframe(details["rules"], hide_index=True, use_container_width=True)
+
+    breakdown_col, record_col = st.columns([1.2, 1])
+    with breakdown_col:
+        st.markdown("### Column Breakdown")
+        column_breakdown = details.get("column_breakdown", pd.DataFrame())
+        if column_breakdown.empty:
+            st.info("No column-level rule or issue breakdown is available for this score run.")
+        else:
+            st.dataframe(column_breakdown, hide_index=True, use_container_width=True)
+    with record_col:
+        st.markdown("### Record Breakdown")
+        record_breakdown = details.get("record_breakdown", pd.DataFrame())
+        if record_breakdown.empty:
+            st.info("No record-level issue samples are available for this score run.")
+        else:
+            st.dataframe(record_breakdown, hide_index=True, use_container_width=True)
+
+    st.markdown("### Recommendations")
+    recommendation_columns = [
+        "column_id",
+        "rule_code",
+        "family",
+        "dimension",
+        "candidate_score",
+        "rank",
+        "score_margin",
+        "ambiguity_status",
+        "review_status",
+        "score_components_jsonb",
+        "warnings",
+        "suggested_parameters_jsonb",
+        "reason",
+    ]
+    recommendations = details.get("recommendations", pd.DataFrame())
+    if recommendations.empty:
+        st.info("No recommendation results are available for this dataset version yet.")
+    else:
+        st.dataframe(recommendations[[column for column in recommendation_columns if column in recommendations.columns]], hide_index=True, use_container_width=True)
+
+    st.markdown("### Profiling Evidence")
+    profile_columns = [
+        "column_name",
+        "inferred_type",
+        "inferred_type_confidence",
+        "metric_scope",
+        "scan_mode",
+        "coverage_estimate",
+        "null_count",
+        "blank_count",
+        "distinct_count",
+        "miscast_count",
+        "miscast_ratio",
+        "patterns",
+        "top_values",
+    ]
+    profile_evidence = details.get("profile_evidence", pd.DataFrame())
+    if profile_evidence.empty:
+        st.info("No profiling evidence is available for this dataset version yet.")
+    else:
+        st.dataframe(profile_evidence[[column for column in profile_columns if column in profile_evidence.columns]], hide_index=True, use_container_width=True)
+
+    st.markdown("### Issue Samples")
+    st.dataframe(details["issues"], hide_index=True, use_container_width=True)
 
 
 def _default_key_columns(columns: list[str]) -> list[str]:
@@ -256,156 +291,15 @@ def _default_key_columns(columns: list[str]) -> list[str]:
     return []
 
 
-def _schema_editor_rows(value) -> list[dict]:
-    if isinstance(value, pd.DataFrame):
-        return value.to_dict(orient="records")
-    return [dict(row) for row in value]
-
-
-def _run_selector(runs: pd.DataFrame) -> str:
-    if runs.empty:
-        return ""
-    labels = {
-        row.run_id: f"{row.run_timestamp.strftime('%Y-%m-%d %H:%M:%S UTC') if pd.notna(row.run_timestamp) else row.run_id} - {row.run_id}"
-        for row in runs.itertuples()
-    }
-    with st.sidebar:
-        return st.selectbox("Run", list(labels.keys()), format_func=lambda run_id: labels[run_id])
-
-
-def _render_dataset_detail(dataset_id: str, details: dict) -> None:
-    st.subheader(f"Dataset Detail: {dataset_id}")
-    metrics = score_summary_metrics(details["dataset_score"])
-    score = metrics["dq_core_score"]
-    status = str(metrics["quality_gate_status"])
-
-    cols = st.columns(5)
-    cols[0].metric("DQ Core Score", _score_text(score))
-    cols[1].markdown(_status_badge(status), unsafe_allow_html=True)
-    cols[2].metric("Records", metrics["total_records"])
-    cols[3].metric("Rules", metrics["rules_total"])
-    cols[4].metric("Failed Rules", metrics["rules_failed"])
-
-    dim_col, issue_col = st.columns([1.4, 1])
-    with dim_col:
-        _render_dimensions(details["dimensions"])
-    with issue_col:
-        _render_issue_summary(details["issues"])
-
-    st.markdown("### Rule Breakdown")
-    _render_rules(details["rules"])
-
-    st.markdown("### Issue Samples")
-    _render_issues(details["issues"])
-
-
-def _render_dimensions(dimensions: pd.DataFrame) -> None:
-    st.markdown("### Dimension Scores")
-    if dimensions.empty:
-        st.info("No dimension scores for this run.")
-        return
-    chart_data = dimensions[dimensions["measurement_status"] == "measured"][["dimension", "dimension_score"]]
-    if not chart_data.empty:
-        st.bar_chart(chart_data.set_index("dimension"), height=280)
-    table = dimensions[
-        [
-            "dimension",
-            "dimension_score",
-            "dimension_weight",
-            "measurement_status",
-            "rules_total",
-            "rules_failed",
-            "rules_warning",
-            "rules_passed",
-        ]
-    ].copy()
-    table["dimension_score"] = table["dimension_score"].map(_round_score)
-    st.dataframe(table, hide_index=True, use_container_width=True)
-
-
-def _render_issue_summary(issues: pd.DataFrame) -> None:
-    st.markdown("### Issue Counts")
-    if issues.empty:
-        st.info("No issue samples captured for this run.")
-        return
-    counts = issues["issue_type"].value_counts().rename_axis("issue_type").reset_index(name="sample_count")
-    st.bar_chart(counts.set_index("issue_type"), height=280)
-    st.dataframe(counts, hide_index=True, use_container_width=True)
-
-
-def _render_rules(rules: pd.DataFrame) -> None:
-    if rules.empty:
-        st.info("No rule scores for this run.")
-        return
-    columns = [
-        "rule_id",
-        "rule_name",
-        "dimension",
-        "target_column",
-        "rule_score",
-        "threshold",
-        "quality_status",
-        "passed",
-        "failed",
-        "miscast",
-        "empty",
-        "not_applicable",
-        "measurement_status",
-        "severity",
-    ]
-    existing = [column for column in columns if column in rules.columns]
-    table = rules[existing].copy()
-    if "rule_score" in table:
-        table["rule_score"] = table["rule_score"].map(_round_score)
-    st.dataframe(table, hide_index=True, use_container_width=True)
-
-
-def _render_issues(issues: pd.DataFrame) -> None:
-    if issues.empty:
-        st.info("No issue samples captured for this run.")
-        return
-    columns = [
-        "rule_id",
-        "rule_name",
-        "severity",
-        "record_key",
-        "target_column",
-        "actual_value",
-        "issue_type",
-        "expected_condition",
-    ]
-    existing = [column for column in columns if column in issues.columns]
-    st.dataframe(issues[existing], hide_index=True, use_container_width=True)
-
-
-def _render_trend(dataset_id: str, runs: pd.DataFrame) -> None:
-    st.subheader("Trend")
-    if runs.empty:
-        st.info("No run history available.")
-        return
-    trend = runs.sort_values("run_timestamp")[["run_timestamp", "dq_core_score", "quality_gate_status", "rules_failed"]]
-    st.line_chart(trend.set_index("run_timestamp")[["dq_core_score"]], height=260)
-    st.dataframe(trend, hide_index=True, use_container_width=True)
-
-
-def _render_methodology() -> None:
-    st.subheader("Methodology")
-    col1, col2, col3 = st.columns(3)
-    col1.markdown("**RuleScore**")
-    col1.code("passed / total_records_in_scope * 100")
-    col2.markdown("**DimensionScore**")
-    col2.code("weighted average of measured RuleScore")
-    col3.markdown("**DQ Core Score**")
-    col3.code("sum(dimension_weight * DimensionScore)")
-    st.caption(
-        "Dimensions with no measured rule are marked not_measured and excluded from the normalized weight sum. "
-        "Phase 1 shows DQ Core Score only; TrustScore and FinalScore are outside this dashboard version."
-    )
-
-
 def _status_badge(status: str) -> str:
     color = STATUS_COLORS.get(status, "#667085")
     return f'<div class="status-card"><span style="background:{color}"></span><strong>{status}</strong><small>Quality Gate</small></div>'
+
+
+def _coverage_text(value) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value) * 100:.0f}%"
 
 
 def _score_text(value) -> str:
@@ -424,26 +318,11 @@ def _inject_styles() -> None:
     st.markdown(
         """
         <style>
-        .block-container { padding-top: 1.6rem; }
-        .status-card {
-            border: 1px solid #d0d5dd;
-            border-radius: 8px;
-            min-height: 78px;
-            padding: 0.75rem 0.9rem;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            gap: 0.15rem;
-        }
-        .status-card span {
-            display: block;
-            width: 36px;
-            height: 5px;
-            border-radius: 999px;
-            margin-bottom: 0.2rem;
-        }
-        .status-card strong { text-transform: uppercase; font-size: 1.05rem; }
-        .status-card small { color: #667085; }
+        .block-container { padding-top: 1.4rem; }
+        .status-card { border: 1px solid #d0d5dd; border-radius: 8px; min-height: 76px; padding: .75rem .9rem; display:flex; flex-direction:column; justify-content:center; gap:.15rem; }
+        .status-card span { display:block; width:36px; height:5px; border-radius:999px; margin-bottom:.2rem; }
+        .status-card strong { text-transform:uppercase; font-size:1.05rem; }
+        .status-card small { color:#667085; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -452,3 +331,8 @@ def _inject_styles() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+

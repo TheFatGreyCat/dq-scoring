@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from datetime import timezone
@@ -68,7 +68,7 @@ class RuleEvaluator:
     def _not_empty(self, dataframe: pd.DataFrame, rule: RuleConfig) -> pd.Series:
         statuses, in_scope, eligible = _initial_statuses(dataframe, rule, rule.target_column)
         empty = in_scope & _is_empty(dataframe[rule.target_column])
-        if rule.null_policy == "ignore":
+        if rule.null_policy in {"ignore", "not_applicable"}:
             statuses.loc[empty] = "not_applicable"
         else:
             statuses.loc[empty] = "empty"
@@ -158,7 +158,7 @@ class RuleEvaluator:
         key_empty = pd.Series(False, index=dataframe.index)
         for column in key_columns:
             key_empty |= _is_empty(dataframe[column])
-        if rule.null_policy == "ignore":
+        if rule.null_policy in {"ignore", "not_applicable"}:
             statuses.loc[in_scope & key_empty] = "not_applicable"
             eligible = in_scope & ~key_empty
         else:
@@ -186,7 +186,7 @@ class RuleEvaluator:
         empty = pd.Series(False, index=dataframe.index)
         for column in related_columns:
             empty |= _is_empty(dataframe[column])
-        if rule.null_policy == "ignore":
+        if rule.null_policy in {"ignore", "not_applicable"}:
             statuses.loc[in_scope & empty] = "not_applicable"
             eligible = in_scope & ~empty
         else:
@@ -223,7 +223,7 @@ class RuleEvaluator:
         condition = _scope_mask(dataframe, rule.parameters.get("when") or rule.scope_filter)
         statuses = pd.Series("not_applicable", index=dataframe.index, dtype="object")
         empty = condition & _is_empty(dataframe[required_column])
-        if rule.null_policy == "ignore":
+        if rule.null_policy in {"ignore", "not_applicable"}:
             statuses.loc[empty] = "not_applicable"
         else:
             statuses.loc[empty] = "empty"
@@ -250,7 +250,7 @@ def _initial_statuses(
     if target_column is None:
         return statuses, in_scope, in_scope.copy()
     empty = in_scope & _is_empty(dataframe[target_column])
-    if rule.null_policy == "ignore":
+    if rule.null_policy in {"ignore", "not_applicable"}:
         statuses.loc[empty] = "not_applicable"
     else:
         statuses.loc[empty] = "empty"
@@ -522,3 +522,4 @@ def _expected_condition(rule: RuleConfig) -> str:
     if rule.rule_name:
         return rule.rule_name
     return f"{rule.rule_type} rule {rule.rule_id}"
+
