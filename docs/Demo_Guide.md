@@ -1,74 +1,136 @@
-# DQ Score Dashboard Demo Guide
+# DQ Scoring V2 Demo Guide
+
+This guide shows the quickest way to run the PostgreSQL-backed DQ Scoring V2 demo.
 
 ## 1. Install Dependencies
 
+Run all commands from the repository root.
+
 ```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## 2. Generate Demo Data
-
-Run scoring for all sample datasets:
-
+## 2. Start PostgreSQL
 ```powershell
-.\.venv\Scripts\python.exe dashboard\generate_demo_data.py --datasets all
+docker compose up -d postgres
+$env:DQ_DATABASE_URL='postgresql://dq:dq@localhost:5432/dq_scoring'
 ```
 
-This writes:
-
-- `data/rules_store/dq_rules.db`
-- `data/score_store/dq_scores.db`
-- JSON score artifacts under `data/score_store/`
-
-The generator supports one or more dataset ids:
+Apply migrations and initialize the Rule Catalog:
 
 ```powershell
-.\.venv\Scripts\python.exe dashboard\generate_demo_data.py --datasets customer_master amazon_products
+.\.venv\Scripts\python.exe -m persistence.db migrate
+.\.venv\Scripts\python.exe -m dq_core.cli bootstrap_catalog
+.\.venv\Scripts\python.exe -m dq_core.cli health_check
 ```
 
-## 3. Run Dashboard
-
+## 3. Run the Dashboard
 ```powershell
 .\.venv\Scripts\streamlit.exe run dashboard\app.py
 ```
 
-The Streamlit app opens with:
+The application contains these tabs:
+- Dashboard: view scores and rule results.
+- Onboard: register and analyze a CSV dataset.
+- Catalog: view available rule templates.
+- System Health: check database and runtime status.
+- Logs: view pipeline execution history.
 
-- Overview of latest DQ Core Score per dataset.
-- Dataset detail and rule breakdown.
-- Issue samples joined from the Rules Engine store.
-- Score trend by run timestamp.
-- Methodology notes for Phase 1 scoring.
+## 4. Demo a Dataset
 
-## 4. Add A New Dataset
-
-Use the `Add Dataset` tab in the Streamlit app:
+Open the Onboard tab:
 
 1. Upload a CSV file.
-2. Review the inferred schema and adjust data types if needed.
-3. Select primary key, mandatory fields, CDE fields, and optional timestamp.
-4. Click `Create Dataset Config`.
+2. Review the inferred schema.
+3. Select primary key, business key, mandatory fields and CDE fields.
+4. Keep Run baseline after register enabled.
+5. Click Register Dataset.
 
-The app writes dataset, rule, and scoring YAML configs under `data/`, then runs
-the existing scoring pipeline when `Run scoring after creating config` is
-enabled. The dataset appears in the dashboard after the app reruns.
+The runtime performs:
 
-## 5. Expected Demo Checks
+```
+Register
+→ Profile
+→ Recommend rules
+→ Bind safe rules
+→ Validate
+→ Calculate score
+```
 
-After generating demo data for all datasets:
+After completion, open the Dashboard tab to review:
 
-- The overview contains `customer_master`, `amazon_products`, and
-  `retail_sales_dataset`.
-- `customer_master` includes failed rules and issue samples from the intentional
-  sample data quality issues.
-- `amazon_products` includes product catalog checks for required fields, price
-  parsing, rating ranges, uniqueness, and price consistency.
-- `retail_sales_dataset` includes transaction checks for required fields,
-  domains, uniqueness, non-negative numeric values, and total amount
-  consistency.
+DQ score.
+Quality Gate status.
+Measurement coverage.
+Dimension scores.
+Rule results.
+Issue samples.
+Score history.
 
-## 6. Run Tests
+Uploaded datasets are stored under:
+
+```
+data/uploads/<dataset_id>/<dataset_version_id>.csv
+```
+
+## 5. Optional CLI Workflow
+
+Register a dataset:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m dq_core.cli register_dataset `
+  --csv data\samples\customer_master.csv `
+  --dataset-id customer_master `
+  --dataset-type customer `
+  --primary-key customer_id `
+  --mandatory-field customer_id
+  ```
+
+Use the returned dataset_version_id:
+
+```powershell
+.\.venv\Scripts\python.exe -m dq_core.cli profile_dataset --dataset-version-id <dataset_version_id>
+
+.\.venv\Scripts\python.exe -m dq_core.cli save_recommended_bindings `
+  --dataset-version-id <dataset_version_id> `
+  --accept-all-above-threshold
+
+.\.venv\Scripts\python.exe -m dq_core.cli run_validation --dataset-version-id <dataset_version_id>
 ```
+
+Use the returned validation_run_id:
+
+```powershell
+.\.venv\Scripts\python.exe -m dq_core.cli calculate_score `
+  --validation-run-id <validation_run_id>
+```
+
+## 6. Run Tests
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
+
+The test suite includes PostgreSQL integration and fresh-install smoke tests.
+
+## 7. Reset the Demo
+
+Reset runtime data:
+
+```powershell
+.\.venv\Scripts\python.exe -m persistence.db reset --yes
+.\.venv\Scripts\python.exe -m dq_core.cli bootstrap_catalog
+```
+
+Remove PostgreSQL and its volume:
+
+```powershell
+docker compose down -v
+```
+
+## Notes
+- PostgreSQL is the runtime storage.
+- Runtime YAML and SQLite stores are no longer used.
+- `dashboard\generate_demo_data.py` requires predefined dataset versions and is not intended for a fresh database.
+- Sampling and chunked processing currently apply mainly to profiling.
