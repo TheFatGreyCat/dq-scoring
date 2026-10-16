@@ -1,0 +1,411 @@
+/**
+ * Privacy workspace translations (VI and EN).
+ * Spread into DICTIONARY in i18n.tsx alongside governanceTranslations and surfaceTranslations.
+ */
+
+export const privacyTranslations = {
+  vi: {
+    // Tabs & Navigation
+    "privacy.tab.overview": "Tổng quan & Profiling",
+    "privacy.tab.classification": "Phân loại & Bảo vệ",
+    "privacy.tab.detectors": "Quy tắc phát hiện",
+    "privacy.unsaved_warning": "Bạn có thay đổi phân loại chưa lưu. Bạn có chắc muốn rời khỏi tab này và hủy thay đổi?",
+
+    // Security & Guarantees
+    "privacy.security.statement":
+      "Dữ liệu thật được dùng trong vùng compute tin cậy; đầu ra nhạy cảm được che.",
+    "privacy.security.clarification":
+      "FULL_MASK là cơ chế bảo vệ đầu ra, TLS là bảo vệ truyền, egress policy là ngăn đích không được phép. Profile triển khai là cấu hình, không chứng nhận thực tế.",
+    "privacy.security.reason_caution":
+      "Lưu ý: Không nhập dữ liệu thật, thông tin cá nhân hoặc thông tin mật vào lý do.",
+    "privacy.security.pattern_caution":
+      "Lưu ý: Chỉ nhập biểu thức chính quy tổng quát; không nhập các giá trị nhạy cảm cụ thể vào mẫu phát hiện.",
+
+    // Categories
+    "privacy.cat.UNDECLARED": "Chưa khai báo",
+    "privacy.cat.STANDARD_DATA": "Dữ liệu thông thường",
+    "privacy.cat.BASIC_PERSONAL_DATA": "Dữ liệu cá nhân cơ bản",
+    "privacy.cat.SENSITIVE_PERSONAL_DATA": "Dữ liệu cá nhân nhạy cảm",
+    "privacy.cat.CONFIDENTIAL_BUSINESS_DATA": "Dữ liệu kinh doanh mật",
+
+    // Scan Statuses
+    "privacy.scan_status.COMPLETE": "Đã hoàn thành",
+    "privacy.scan_status.UNAVAILABLE": "Chưa xác minh",
+    "privacy.scan_status.QUEUED": "Đang chờ quét",
+    "privacy.scan_status.RUNNING": "Đang quét",
+    "privacy.scan_status.FAILED": "Quét lỗi",
+    "privacy.scan.stale_badge": "Cấu hình đã thay đổi (cũ)",
+    "privacy.scan.stale_warning":
+      "Cấu hình quy tắc đã thay đổi sau lần quét này. Kết quả có thể cũ và toàn bộ dữ liệu được bảo vệ đóng cho đến khi quét lại.",
+    "privacy.scan.status_label": "Trạng thái quét",
+    "privacy.scan.last_scanned": "Quét lúc",
+    "privacy.scan.config_version": "Phiên bản cấu hình: {version}",
+
+    // Profiling tab
+    "privacy.profiling.title": "Thông tin Snapshot & Lược đồ",
+    "privacy.profiling.checksum_note": "Checksum toàn vẹn nội dung (không phải mã hóa)",
+    "privacy.profiling.sample_note": "Thống kê tính trên mẫu {sample} dòng / tổng {total} dòng",
+    "privacy.profiling.no_profile": "Chưa có dữ liệu profiling cho snapshot này.",
+    "privacy.profiling.col.name": "Cột",
+    "privacy.profiling.col.type": "Kiểu gợi ý",
+    "privacy.profiling.col.logical_types": "Kiểu logic",
+    "privacy.profiling.col.encoding": "Cấu trúc mã hóa",
+    "privacy.profiling.col.null_ratio": "Tỷ lệ NULL (mẫu)",
+    "privacy.profiling.col.distinct": "Số giá trị phân biệt",
+    "privacy.profiling.col.parse_success": "Phân tích thành công",
+    "privacy.profiling.col.timestamp_format": "Định dạng thời gian",
+    "privacy.profiling.col.range": "Khoảng giá trị (Min – Max)",
+    "privacy.profiling.col.status": "Trạng thái bảo vệ",
+    "privacy.profiling.protected_hidden": "Đã ẩn (Cột được bảo vệ)",
+    "privacy.profiling.scan_unverified_hidden": "Đã ẩn (Chưa xác minh/Đang quét)",
+    "privacy.profiling.format": "Định dạng",
+    "privacy.profiling.captured_at": "Thời điểm chụp",
+    "privacy.profiling.raw_size": "Kích thước gốc",
+    "privacy.profiling.canonical_size": "Kích thước chuẩn hóa",
+    "privacy.profiling.normalization_version": "Phiên bản chuẩn hóa",
+    "privacy.profiling.dimensions": "Số chiều",
+
+    // Classification tab
+    "privacy.class.title": "Phân loại cột & Bảo vệ đầu ra",
+    "privacy.class.filter.all": "Tất cả ({count})",
+    "privacy.class.filter.sensitive": "Nhạy cảm ({count})",
+    "privacy.class.filter.undeclared": "Chưa khai báo ({count})",
+    "privacy.class.filter.conflict": "Xung đột ({count})",
+    "privacy.class.search_placeholder": "Tìm kiếm tên cột…",
+    "privacy.class.selected_count": "Đã chọn {count} cột",
+    "privacy.class.bulk_apply": "Áp dụng cho cột đã chọn",
+    "privacy.class.bulk_placeholder": "— Chọn phân loại —",
+    "privacy.class.col.select": "Chọn",
+    "privacy.class.col.name": "Tên cột",
+    "privacy.class.col.declared": "Phân loại đã khai báo",
+    "privacy.class.col.detected": "Phát hiện tự động",
+    "privacy.class.col.protection": "Đầu ra",
+    "privacy.class.col.conflict": "Xung đột",
+    "privacy.class.col.reason": "Lý do gần nhất",
+    "privacy.class.protected_badge": "Được che (FULL_MASK)",
+    "privacy.class.unprotected_badge": "Bản rõ",
+    "privacy.class.conflict_badge": "Xung đột",
+    "privacy.class.conflict_tooltip":
+      "Khai báo thông thường không ghi đè phát hiện nhạy cảm. Để bỏ che, cần hủy (dismiss) phát hiện nhạy cảm trước.",
+    "privacy.class.reason_label": "Lý do thay đổi phân loại (áp dụng cho lần lưu này)",
+    "privacy.class.reason_placeholder": "Nhập lý do phân loại (1–500 ký tự, không chứa dữ liệu thật)…",
+    "privacy.class.save_button": "Lưu phân loại",
+    "privacy.class.saving": "Đang lưu…",
+    "privacy.class.reset_draft": "Hủy các thay đổi chưa lưu",
+    "privacy.class.version_label": "Phiên bản chính sách: {version}",
+    "privacy.class.stale_conflict":
+      "Chính sách bảo vệ đã thay đổi bởi người dùng khác (xung đột phiên bản). Dữ liệu mới nhất đã được tải lại; các thay đổi dự thảo của bạn được giữ nguyên.",
+    "privacy.class.readonly_notice":
+      "Bạn đang xem ở chế độ chỉ đọc. Chỉ quản trị viên, chủ sở hữu hoặc quản trị viên dữ liệu mới có quyền thay đổi phân loại.",
+
+    // Export button & dialog
+    "privacy.export.button": "Export Masked Parquet",
+    "privacy.export.exporting": "Exporting Parquet…",
+    "privacy.export.forbidden": "Bạn không có quyền tải xuống tệp dữ liệu đã che của snapshot này.",
+
+    // Findings section
+    "privacy.findings.title": "Phát hiện dữ liệu nhạy cảm",
+    "privacy.findings.empty": "Không có dữ liệu nhạy cảm được ghi nhận trong lần quét này.",
+    "privacy.findings.unverified_note": "Chưa quét hoặc đang quét; chưa thể xác nhận dữ liệu an toàn.",
+    "privacy.findings.historical_badge": "Xác nhận từ lần quét trước",
+    "privacy.findings.review_reason_label": "Review reason",
+    "privacy.findings.review_reason_placeholder": "Nhập lý do xác nhận hoặc hủy phát hiện (bắt buộc)…",
+    "privacy.findings.confirm_btn": "Confirm",
+    "privacy.findings.dismiss_btn": "Dismiss",
+    "privacy.findings.rule_label": "Quy tắc: {code} (Rev {rev})",
+    "privacy.findings.pagination": "Trang {page} / {total}",
+
+    // Advanced policy block
+    "privacy.policy.advanced_title": "Chính sách bảo vệ danh mục bổ sung (Nâng cao)",
+    "privacy.policy.heading": "Asset Protection Policy",
+    "privacy.policy.note":
+      "Chính sách danh mục áp dụng che bắt buộc cho mọi cột thuộc danh mục đã chọn. Khai báo phân loại cột luôn có hiệu lực bắt buộc độc lập.",
+    "privacy.policy.save": "Lưu chính sách danh mục",
+    "privacy.policy.saving": "Đang lưu chính sách…",
+
+    // Privacy Rules Tab
+    "privacy.rules.title": "Quy tắc phát hiện PII & Dữ liệu nhạy cảm",
+    "privacy.rules.subtitle": "Quản lý các quy tắc tích hợp và quy tắc tùy chỉnh theo tenant.",
+    "privacy.rules.builtin_badge": "Tích hợp",
+    "privacy.rules.custom_badge": "Tùy chỉnh",
+    "privacy.rules.col.code": "Mã quy tắc",
+    "privacy.rules.col.kind": "Loại",
+    "privacy.rules.col.category": "Danh mục",
+    "privacy.rules.col.pattern": "Mẫu phát hiện",
+    "privacy.rules.col.scope": "Phạm vi cột",
+    "privacy.rules.col.revision": "Bản sửa đổi",
+    "privacy.rules.col.status": "Trạng thái",
+    "privacy.rules.col.actions": "Thao tác",
+    "privacy.rules.scope_all": "Tất cả các cột",
+    "privacy.rules.scope_count": "{count} cột",
+    "privacy.rules.kind.BUILTIN": "Tích hợp",
+    "privacy.rules.kind.COLUMN_NAME": "Tên cột",
+    "privacy.rules.kind.VALUE_PATTERN": "Giá trị ô",
+    "privacy.rules.match.FULL": "Khớp toàn bộ (Full)",
+    "privacy.rules.match.SEARCH": "Tìm kiếm trong chuỗi (Search)",
+    "privacy.rules.case_sensitive": "Phân biệt hoa/thường",
+    "privacy.rules.case_insensitive": "Không phân biệt hoa/thường",
+    "privacy.rules.btn_new": "Thêm quy tắc tùy chỉnh",
+    "privacy.rules.btn_edit": "Sửa",
+    "privacy.rules.btn_toggle_disable": "Tắt",
+    "privacy.rules.btn_toggle_enable": "Bật",
+    "privacy.rules.btn_try": "Thử quy tắc",
+    "privacy.rules.btn_rescan": "Quét lại & áp dụng",
+    "privacy.rules.rescan_description":
+      "Chạy lại toàn bộ tập quy tắc đang bật trên snapshot này và cập nhật danh sách phát hiện bảo vệ.",
+    "privacy.rules.form.create_title": "Tạo quy tắc phát hiện mới",
+    "privacy.rules.form.edit_title": "Cập nhật quy tắc: {code} (Bản sửa đổi hiện tại: {rev})",
+    "privacy.rules.form.code": "Mã quy tắc (chữ in hoa, số và gạch dưới, bắt đầu bằng chữ cái)",
+    "privacy.rules.form.kind": "Loại quy tắc",
+    "privacy.rules.form.category": "Danh mục nhạy cảm",
+    "privacy.rules.form.pattern": "Mẫu RE2 (tối đa 512 ký tự, không hỗ trợ lookaround/backreference)",
+    "privacy.rules.form.match_mode": "Chế độ khớp",
+    "privacy.rules.form.case_sensitive": "Phân biệt chữ hoa / chữ thường",
+    "privacy.rules.form.enabled": "Kích hoạt quy tắc này",
+    "privacy.rules.form.scope": "Giới hạn cột áp dụng (để trống để áp dụng toàn bộ)",
+    "privacy.rules.form.builtin_immutable": "Quy tắc tích hợp: Mẫu phát hiện và loại quy tắc không thể thay đổi.",
+    "privacy.rules.form.submit_create": "Tạo quy tắc mới",
+    "privacy.rules.form.submit_update": "Lưu bản sửa đổi mới",
+    "privacy.rules.form.cancel": "Hủy",
+    "privacy.rules.no_permission":
+      "Bạn không có quyền xem hoặc chỉnh sửa định nghĩa quy tắc phát hiện (chỉ dành cho vai trò quản trị/chủ sở hữu/quản trị viên dữ liệu).",
+    "privacy.rules.max_enabled_warning": "Đã đạt giới hạn tối đa 100 quy tắc kích hoạt đồng thời.",
+
+    // Scan jobs & Polling
+    "privacy.scan_job.title": "Lượt quét bảo mật",
+    "privacy.scan_job.preview_title": "Kết quả thử nghiệm quy tắc (Bản xem trước)",
+    "privacy.scan_job.apply_title": "Kết quả quét & áp dụng",
+    "privacy.scan_job.purpose.PREVIEW": "Thử nghiệm (Không lưu kết quả bảo vệ)",
+    "privacy.scan_job.purpose.APPLY": "Áp dụng chính thức",
+    "privacy.scan_job.state.QUEUED": "Đang xếp hàng chờ xử lý…",
+    "privacy.scan_job.state.RUNNING": "Đang thực hiện quét…",
+    "privacy.scan_job.state.COMPLETE": "Hoàn thành",
+    "privacy.scan_job.state.FAILED": "Thất bại",
+    "privacy.scan_job.total_findings": "Tổng số phát hiện: {count}",
+    "privacy.scan_job.no_findings": "Không phát hiện dữ liệu nhạy cảm nào phù hợp với quy tắc này.",
+    "privacy.scan_job.scope_missing": "Cột trong phạm vi quy tắc không tồn tại trong snapshot: {columns}",
+    "privacy.scan_job.dismiss_preview": "Đóng kết quả thử",
+
+    // Scan errors
+    "privacy.scan_error.PRIVACY_RULE_INVALID": "Cấu hình quy tắc không hợp lệ hoặc biểu thức chính quy lỗi.",
+    "privacy.scan_error.SNAPSHOT_REIMPORT_REQUIRED": "Snapshot chưa có định dạng chuẩn hóa tương thích; cần nhập lại.",
+    "privacy.scan_error.OBJECT_CHANGED": "Tệp dữ liệu đã bị thay đổi trong quá trình quét.",
+    "privacy.scan_error.STORAGE_UNAVAILABLE": "Không thể truy cập hệ thống lưu trữ đối tượng.",
+    "privacy.scan_error.PRIVACY_SCAN_LIMIT_EXCEEDED": "Vượt quá giới hạn lượt quét đồng thời cho phép.",
+    "privacy.scan_error.PRIVACY_SCAN_FAILED": "Lượt quét thất bại do lỗi nội bộ hệ thống.",
+    "privacy.scan_error.PRIVACY_SCAN_IN_PROGRESS": "Đang có một lượt thử nghiệm quy tắc khác đang chạy trên snapshot này.",
+
+    // Specific API error codes
+    "error.INVALID_PRIVACY_PATTERN": "Mẫu biểu thức chính quy không hợp lệ hoặc sử dụng cú pháp không được RE2 hỗ trợ.",
+    "error.PRIVACY_RULE_CODE_CONFLICT": "Mã quy tắc phát hiện này đã tồn tại trong workspace.",
+    "error.PRIVACY_RULE_REVISION_CONFLICT": "Quy tắc đã được cập nhật bởi phiên khác; vui lòng làm mới và thử lại.",
+    "error.INVALID_CLASSIFICATION_COLUMN": "Tên cột phân loại không tồn tại trong snapshot này.",
+    "error.DUPLICATE_CLASSIFICATION_COLUMN": "Yêu cầu chứa nhiều thay đổi trên cùng một cột.",
+    "error.POLICY_VERSION_CONFLICT": "Phiên bản chính sách bảo vệ đã thay đổi; vui lòng thử lại.",
+    "error.FINDING_STATUS_CONFLICT": "Trạng thái phát hiện đã thay đổi; vui lòng làm mới.",
+    "error.SNAPSHOT_REIMPORT_REQUIRED": "Snapshot cần được nhập lại để hỗ trợ tính năng bảo vệ này.",
+    "error.PRIVACY_SCAN_IN_PROGRESS": "Đang có một lượt quét đang chạy trên snapshot này.",
+  },
+  en: {
+    // Tabs & Navigation
+    "privacy.tab.overview": "Overview & Profiling",
+    "privacy.tab.classification": "Classification & Protection",
+    "privacy.tab.detectors": "Detection Rules",
+    "privacy.unsaved_warning": "You have unsaved classification changes. Are you sure you want to leave this tab and discard changes?",
+
+    // Security & Guarantees
+    "privacy.security.statement":
+      "Real data is used within the trusted compute boundary; sensitive outputs are masked.",
+    "privacy.security.clarification":
+      "FULL_MASK protects outputs, TLS secures transport, and egress policy restricts unauthorized destinations. Deployment profile represents configuration, not a formal certification.",
+    "privacy.security.reason_caution":
+      "Caution: Do not enter real data, personal information, or confidential secrets into the reason field.",
+    "privacy.security.pattern_caution":
+      "Caution: Enter only generalized patterns; do not include specific sensitive literals in detector patterns.",
+
+    // Categories
+    "privacy.cat.UNDECLARED": "Undeclared",
+    "privacy.cat.STANDARD_DATA": "Standard Data",
+    "privacy.cat.BASIC_PERSONAL_DATA": "Basic Personal Data (PII)",
+    "privacy.cat.SENSITIVE_PERSONAL_DATA": "Sensitive Personal Data (SPI)",
+    "privacy.cat.CONFIDENTIAL_BUSINESS_DATA": "Confidential Business Data",
+
+    // Scan Statuses
+    "privacy.scan_status.COMPLETE": "COMPLETE",
+    "privacy.scan_status.UNAVAILABLE": "Unverified",
+    "privacy.scan_status.QUEUED": "Queued",
+    "privacy.scan_status.RUNNING": "Scanning",
+    "privacy.scan_status.FAILED": "Scan Failed",
+    "privacy.scan.stale_badge": "Stale (Config Changed)",
+    "privacy.scan.stale_warning":
+      "Detector rules configuration has changed since this scan. Results may be stale; all columns are protected fail-closed until rescanned.",
+    "privacy.scan.status_label": "Scan Status",
+    "privacy.scan.last_scanned": "Scanned at",
+    "privacy.scan.config_version": "Config Version: {version}",
+
+    // Profiling tab
+    "privacy.profiling.title": "Snapshot & Schema Metadata",
+    "privacy.profiling.checksum_note": "Content integrity checksum (not encryption)",
+    "privacy.profiling.sample_note": "Sample statistics computed on {sample} / {total} total rows",
+    "privacy.profiling.no_profile": "No profiling data available for this snapshot.",
+    "privacy.profiling.col.name": "Column",
+    "privacy.profiling.col.type": "Type Hint",
+    "privacy.profiling.col.logical_types": "Logical Types",
+    "privacy.profiling.col.encoding": "Structural Encoding",
+    "privacy.profiling.col.null_ratio": "Null Ratio (Sample)",
+    "privacy.profiling.col.distinct": "Distinct Count",
+    "privacy.profiling.col.parse_success": "Parse Success",
+    "privacy.profiling.col.timestamp_format": "Timestamp Format",
+    "privacy.profiling.col.range": "Range (Min – Max)",
+    "privacy.profiling.col.status": "Protection Status",
+    "privacy.profiling.protected_hidden": "Hidden (Protected Column)",
+    "privacy.profiling.scan_unverified_hidden": "Hidden (Unverified / Scanning)",
+    "privacy.profiling.format": "Format",
+    "privacy.profiling.captured_at": "Captured At",
+    "privacy.profiling.raw_size": "Raw Size",
+    "privacy.profiling.canonical_size": "Canonical Size",
+    "privacy.profiling.normalization_version": "Normalization Version",
+    "privacy.profiling.dimensions": "Dimensions",
+
+    // Classification tab
+    "privacy.class.title": "Column Classification & Output Protection",
+    "privacy.class.filter.all": "All ({count})",
+    "privacy.class.filter.sensitive": "Sensitive ({count})",
+    "privacy.class.filter.undeclared": "Undeclared ({count})",
+    "privacy.class.filter.conflict": "Conflict ({count})",
+    "privacy.class.search_placeholder": "Search column names…",
+    "privacy.class.selected_count": "{count} column(s) selected",
+    "privacy.class.bulk_apply": "Apply to Selected",
+    "privacy.class.bulk_placeholder": "— Select category —",
+    "privacy.class.col.select": "Select",
+    "privacy.class.col.name": "Column",
+    "privacy.class.col.declared": "Declared Classification",
+    "privacy.class.col.detected": "Detected Categories",
+    "privacy.class.col.protection": "Output Protection",
+    "privacy.class.col.conflict": "Conflict",
+    "privacy.class.col.reason": "Last Reason",
+    "privacy.class.protected_badge": "Masked (FULL_MASK)",
+    "privacy.class.unprotected_badge": "Plaintext",
+    "privacy.class.conflict_badge": "Conflict",
+    "privacy.class.conflict_tooltip":
+      "Standard data declarations do not override active sensitive findings. To unmask, dismiss the sensitive findings with a reason first.",
+    "privacy.class.reason_label": "Classification reason (required for this save)",
+    "privacy.class.reason_placeholder": "Enter reason for this classification change (1–500 chars, no real data)…",
+    "privacy.class.save_button": "Save Classifications",
+    "privacy.class.saving": "Saving…",
+    "privacy.class.reset_draft": "Discard Draft Changes",
+    "privacy.class.version_label": "Policy Version: {version}",
+    "privacy.class.stale_conflict":
+      "Protection policy was updated by another user (version conflict). The latest state has been reloaded; your draft changes were preserved.",
+    "privacy.class.readonly_notice":
+      "Viewing in read-only mode. Workspace admin, data owner, or data steward role is required to modify classifications.",
+
+    // Export button & dialog
+    "privacy.export.button": "Export Masked Parquet",
+    "privacy.export.exporting": "Exporting Parquet…",
+    "privacy.export.forbidden": "You do not have permission to download masked exports for this snapshot.",
+
+    // Findings section
+    "privacy.findings.title": "Sensitive Data Detection",
+    "privacy.findings.empty": "No sensitive data patterns detected in this snapshot.",
+    "privacy.findings.unverified_note": "Scan is unverified, queued, or running; cannot certify clean data.",
+    "privacy.findings.historical_badge": "Confirmed from previous scan",
+    "privacy.findings.review_reason_label": "Review reason",
+    "privacy.findings.review_reason_placeholder": "Enter reason to confirm or dismiss this finding (required)…",
+    "privacy.findings.confirm_btn": "Confirm",
+    "privacy.findings.dismiss_btn": "Dismiss",
+    "privacy.findings.rule_label": "Rule: {code} (Rev {rev})",
+    "privacy.findings.pagination": "Page {page} / {total}",
+
+    // Advanced policy block
+    "privacy.policy.advanced_title": "Additional Category Protection Policies (Advanced)",
+    "privacy.policy.heading": "Asset Protection Policy",
+    "privacy.policy.note":
+      "Category policies enforce mandatory output masking for all columns under selected categories. Per-column classifications are always enforced independently.",
+    "privacy.policy.save": "Save Protection Policy",
+    "privacy.policy.saving": "Saving Policy…",
+
+    // Privacy Rules Tab
+    "privacy.rules.title": "PII & Sensitive Data Detection Rules",
+    "privacy.rules.subtitle": "Manage built-in and tenant-scoped custom detector rules.",
+    "privacy.rules.builtin_badge": "Built-in",
+    "privacy.rules.custom_badge": "Custom",
+    "privacy.rules.col.code": "Code",
+    "privacy.rules.col.kind": "Kind",
+    "privacy.rules.col.category": "Category",
+    "privacy.rules.col.pattern": "Pattern",
+    "privacy.rules.col.scope": "Column Scope",
+    "privacy.rules.col.revision": "Rev",
+    "privacy.rules.col.status": "Status",
+    "privacy.rules.col.actions": "Actions",
+    "privacy.rules.scope_all": "All columns",
+    "privacy.rules.scope_count": "{count} column(s)",
+    "privacy.rules.kind.BUILTIN": "Built-in",
+    "privacy.rules.kind.COLUMN_NAME": "Column Name",
+    "privacy.rules.kind.VALUE_PATTERN": "Value Pattern",
+    "privacy.rules.match.FULL": "Full Match",
+    "privacy.rules.match.SEARCH": "Search",
+    "privacy.rules.case_sensitive": "Case sensitive",
+    "privacy.rules.case_insensitive": "Case insensitive",
+    "privacy.rules.btn_new": "Add Custom Rule",
+    "privacy.rules.btn_edit": "Edit",
+    "privacy.rules.btn_toggle_disable": "Disable",
+    "privacy.rules.btn_toggle_enable": "Enable",
+    "privacy.rules.btn_try": "Try Rule",
+    "privacy.rules.btn_rescan": "Rescan & Apply",
+    "privacy.rules.rescan_description":
+      "Rerun all latest enabled rules on this snapshot and update effective protection findings.",
+    "privacy.rules.form.create_title": "Create Privacy Detector Rule",
+    "privacy.rules.form.edit_title": "Update Rule: {code} (Current Revision: {rev})",
+    "privacy.rules.form.code": "Rule Code (uppercase letters, numbers and underscores, starting with letter)",
+    "privacy.rules.form.kind": "Rule Kind",
+    "privacy.rules.form.category": "Sensitive Category",
+    "privacy.rules.form.pattern": "RE2 Pattern (max 512 chars, no lookaround or backreferences)",
+    "privacy.rules.form.match_mode": "Match Mode",
+    "privacy.rules.form.case_sensitive": "Case Sensitive",
+    "privacy.rules.form.enabled": "Rule Enabled",
+    "privacy.rules.form.scope": "Column Scope (leave empty to apply to all columns)",
+    "privacy.rules.form.builtin_immutable": "Built-in rule: Pattern and kind cannot be modified.",
+    "privacy.rules.form.submit_create": "Create Rule",
+    "privacy.rules.form.submit_update": "Save Revision",
+    "privacy.rules.form.cancel": "Cancel",
+    "privacy.rules.no_permission":
+      "You do not have permission to view or edit privacy detector rules (editor roles only).",
+    "privacy.rules.max_enabled_warning": "Maximum 100 enabled rules limit reached for this workspace.",
+
+    // Scan jobs & Polling
+    "privacy.scan_job.title": "Privacy Scan Job",
+    "privacy.scan_job.preview_title": "Rule Preview Results (Test Run)",
+    "privacy.scan_job.apply_title": "Scan & Apply Results",
+    "privacy.scan_job.purpose.PREVIEW": "Preview (Does not persist findings)",
+    "privacy.scan_job.purpose.APPLY": "Apply",
+    "privacy.scan_job.state.QUEUED": "Queued…",
+    "privacy.scan_job.state.RUNNING": "Scanning…",
+    "privacy.scan_job.state.COMPLETE": "Complete",
+    "privacy.scan_job.state.FAILED": "Failed",
+    "privacy.scan_job.total_findings": "Total findings: {count}",
+    "privacy.scan_job.no_findings": "No sensitive data matched this rule.",
+    "privacy.scan_job.scope_missing": "Scoped columns missing from this snapshot: {columns}",
+    "privacy.scan_job.dismiss_preview": "Close Preview",
+
+    // Scan errors
+    "privacy.scan_error.PRIVACY_RULE_INVALID": "Invalid rule configuration or regex compilation failure.",
+    "privacy.scan_error.SNAPSHOT_REIMPORT_REQUIRED": "Snapshot lacks compatible canonical Parquet; re-import required.",
+    "privacy.scan_error.OBJECT_CHANGED": "Source object changed during scan.",
+    "privacy.scan_error.STORAGE_UNAVAILABLE": "Object storage unavailable.",
+    "privacy.scan_error.PRIVACY_SCAN_LIMIT_EXCEEDED": "Concurrent scan limit exceeded.",
+    "privacy.scan_error.PRIVACY_SCAN_FAILED": "Internal error during privacy scan.",
+    "privacy.scan_error.PRIVACY_SCAN_IN_PROGRESS": "Another preview scan is currently in progress on this snapshot.",
+
+    // Specific API error codes
+    "error.INVALID_PRIVACY_PATTERN": "Invalid regex pattern or unsupported RE2 construct.",
+    "error.PRIVACY_RULE_CODE_CONFLICT": "A rule with this code already exists in this workspace.",
+    "error.PRIVACY_RULE_REVISION_CONFLICT": "Rule was updated in another session; please refresh and retry.",
+    "error.INVALID_CLASSIFICATION_COLUMN": "Specified column does not exist in this snapshot.",
+    "error.DUPLICATE_CLASSIFICATION_COLUMN": "Multiple changes requested for the same column.",
+    "error.POLICY_VERSION_CONFLICT": "Protection policy version changed; please retry.",
+    "error.FINDING_STATUS_CONFLICT": "Finding status was updated in another session; please refresh.",
+    "error.SNAPSHOT_REIMPORT_REQUIRED": "Snapshot must be re-imported to use this privacy feature.",
+    "error.PRIVACY_SCAN_IN_PROGRESS": "A privacy scan is already in progress for this snapshot.",
+  },
+};

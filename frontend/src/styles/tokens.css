@@ -1,0 +1,72 @@
+/*
+ * Design tokens for the DQ Scoring red-accent enterprise theme.
+ * Brand red is chrome only (strip, active nav, focus ring); text-bearing
+ * actions use the darker --action so white text meets WCAG AA (>= 4.5:1).
+ * Quality-gate hues are deliberately distinct from brand red.
+ * Pairs used for text are checked by src/styles/tokens.test.ts.
+ */
+:root {
+  color-scheme: light;
+  --brand: #ee0033;
+  --action: #d6002f;
+  --action-hover: #be0129;
+  --action-pressed: #a00022;
+  --on-action: #ffffff;
+
+  --bg: #f5f5f5;
+  --surface: #ffffff;
+  --surface-muted: #fafafa;
+  --border: #d9d9d9;
+  --fg: #282828;
+  --fg-muted: #5c5c5c;
+  --nav-bg: #2c2f31;
+  --nav-fg: #f0f0f0;
+  --nav-active-bg: #44494d;
+
+  --pass-fg: #157f3b;
+  --pass-bg: #ecfdf3;
+  --warn-fg: #b54708;
+  --warn-bg: #fffaeb;
+  --fail-fg: #9f1239;
+  --fail-bg: #fff1f3;
+  --error-fg: #5b21b6;
+  --error-bg: #f5f3ff;
+  --neutral-fg: #475467;
+  --neutral-bg: #f2f4f7;
+  --info-fg: #0b63ce;
+  --info-bg: #eff6ff;
+
+  --shadow-card: 0 2px 8px rgb(0 0 0 / 0.06);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --action: #e0003a;
+  --action-hover: #be0129;
+  --action-pressed: #a00022;
+
+  --bg: #141414;
+  --surface: #1f1f1f;
+  --surface-muted: #262626;
+  --border: #3a3a3a;
+  --fg: #f0f0f0;
+  --fg-muted: #b0b0b0;
+  --nav-bg: #0f0f0f;
+  --nav-fg: #f0f0f0;
+  --nav-active-bg: #2c2f31;
+
+  --pass-fg: #75e0a7;
+  --pass-bg: #0c2b1b;
+  --warn-fg: #fdb022;
+  --warn-bg: #2e1d05;
+  --fail-fg: #fda4af;
+  --fail-bg: #3a0d18;
+  --error-fg: #c4b5fd;
+  --error-bg: #24123f;
+  --neutral-fg: #cfd4dc;
+  --neutral-bg: #272b33;
+  --info-fg: #93c5fd;
+  --info-bg: #0d2240;
+
+  --shadow-card: 0 2px 8px rgb(0 0 0 / 0.4);
+}
