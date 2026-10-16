@@ -1,0 +1,43 @@
+{{- if and .Values.security.protectedProcessing.enabled .Values.security.protectedProcessing.policyProbe.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-policy-probe
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor-probe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dq-scoring.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: executor-probe
+  template:
+    metadata:
+      labels:
+        {{- include "dq-scoring.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: executor-probe
+        spark-role: executor
+        dq-scoring/protected: "true"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: probe
+          image: "{{ .Values.sparkImage.repository }}:{{ .Values.sparkImage.tag }}"
+          imagePullPolicy: {{ .Values.sparkImage.pullPolicy }}
+          command: ["/bin/sh", "-c", "trap : TERM INT; sleep infinity & wait"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+{{- end }}

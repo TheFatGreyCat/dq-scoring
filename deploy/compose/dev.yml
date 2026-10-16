@@ -1,0 +1,82 @@
+
+# DQ Scoring System — Unified Local Developer Sandbox (PostgreSQL 16 + MinIO)
+
+services:
+  postgres:
+    image: ${DQ_POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: dq-scoring-postgres
+    restart: unless-stopped
+    ports:
+      - "${DQ_POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${DQ_POSTGRES_DB:-dq_scoring}
+      POSTGRES_USER: ${DQ_POSTGRES_USER:-dq_scoring}
+      POSTGRES_PASSWORD: ${DQ_POSTGRES_PASSWORD:?Set DQ_POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - dq_network
+
+  minio:
+    image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+    container_name: dq-scoring-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${DQ_S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${DQ_S3_SECRET_ACCESS_KEY:?Set DQ_S3_SECRET_ACCESS_KEY in .env}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - dq_network
+
+  minio-init:
+    image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+    container_name: dq-scoring-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${DQ_S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${DQ_S3_SECRET_ACCESS_KEY:?Set DQ_S3_SECRET_ACCESS_KEY in .env}
+      DQ_S3_BUCKET_STAGING: ${DQ_S3_BUCKET_STAGING:-dq-staging-local}
+      DQ_S3_BUCKET_SNAPSHOTS: ${DQ_S3_BUCKET_SNAPSHOTS:-dq-snapshots-local}
+      DQ_S3_BUCKET_ARTIFACTS: ${DQ_S3_BUCKET_ARTIFACTS:-dq-artifacts-local}
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      /usr/bin/mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      /usr/bin/mc mb --ignore-existing local/$${DQ_S3_BUCKET_STAGING};
+      /usr/bin/mc mb --ignore-existing local/$${DQ_S3_BUCKET_SNAPSHOTS};
+      /usr/bin/mc mb --ignore-existing local/$${DQ_S3_BUCKET_ARTIFACTS};
+      /usr/bin/mc version enable local/$${DQ_S3_BUCKET_SNAPSHOTS};
+      echo 'MinIO local sandbox buckets successfully initialized with versioning on snapshots!';
+      exit 0;
+      "
+    networks:
+      - dq_network
+
+volumes:
+  postgres_data:
+    name: dq_scoring_postgres_data
+  minio_data:
+    name: dq_scoring_minio_data
+
+networks:
+  dq_network:
+    name: dq_scoring_network

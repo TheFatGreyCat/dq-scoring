@@ -1,0 +1,20 @@
+# Staging environment overrides for DQ Scoring Helm Chart
+global:
+  appEnv: staging
+
+api:
+  replicas: 2
+  resources:
+    limits:
+      memory: 1024Mi
+
+ingress:
+  hosts:
+    - host: dq-scoring.staging.internal
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: ui

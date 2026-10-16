@@ -1,0 +1,63 @@
+{{/* Static SPA (frontend/Dockerfile): nginx on 8080, no API credentials or config; the ingress routes /api to the API. */}}
+{{- if .Values.ui.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-ui
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  replicas: {{ .Values.ui.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dq-scoring.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ui
+  template:
+    metadata:
+      labels:
+        {{- include "dq-scoring.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ui
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ui
+          image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag }}"
+          imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ .Values.ui.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.ui.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}

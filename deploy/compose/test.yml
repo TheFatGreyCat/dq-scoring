@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:15432:5432"
+    environment:
+      POSTGRES_DB: dq_scoring_test
+      POSTGRES_USER: dq_test_admin
+      POSTGRES_PASSWORD: ${DQ_TEST_DB_PASSWORD:?Generate the private test environment first}
+    volumes:
+      - test_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dq_test_admin -d dq_scoring_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  minio:
+    image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:19001:9001"
+    environment:
+      MINIO_ROOT_USER: ${DQ_TEST_S3_ACCESS_KEY:?Generate the private test environment first}
+      MINIO_ROOT_PASSWORD: ${DQ_TEST_S3_SECRET_KEY:?Generate the private test environment first}
+    volumes:
+      - test_minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+volumes:
+  test_postgres:
+  test_minio:

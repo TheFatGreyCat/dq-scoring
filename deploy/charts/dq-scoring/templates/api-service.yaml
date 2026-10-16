@@ -1,0 +1,24 @@
+{{- if .Values.api.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-api
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  {{- if .Values.security.protectedProcessing.enabled }}
+  annotations:
+    traefik.ingress.kubernetes.io/service.serversscheme: https
+    traefik.ingress.kubernetes.io/service.serverstransport: {{ printf "%s-%s-transport@kubernetescrd" .Release.Namespace (include "dq-scoring.fullname" .) }}
+  {{- end }}
+spec:
+  type: {{ .Values.api.service.type }}
+  ports:
+    - port: {{ .Values.api.service.port }}
+      targetPort: {{ include "dq-scoring.apiPortName" . }}
+      protocol: TCP
+      name: {{ include "dq-scoring.apiPortName" . }}
+  selector:
+    {{- include "dq-scoring.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+{{- end }}

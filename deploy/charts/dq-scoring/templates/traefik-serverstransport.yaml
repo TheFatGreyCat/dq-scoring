@@ -1,0 +1,13 @@
+{{- if and .Values.api.enabled .Values.security.protectedProcessing.enabled }}
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-transport
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+spec:
+  serverName: {{ .Values.security.protectedProcessing.apiServerName | quote }}
+  rootCAsSecrets:
+    - {{ .Values.security.protectedProcessing.caSecret | quote }}
+  insecureSkipVerify: false
+{{- end }}

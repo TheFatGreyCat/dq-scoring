@@ -1,0 +1,27 @@
+# Production environment overrides for DQ Scoring Helm Chart
+global:
+  appEnv: production
+
+api:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 1024Mi
+
+ui:
+  replicas: 2
+
+ingress:
+  hosts:
+    - host: dq-scoring.prod.company.org
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: ui

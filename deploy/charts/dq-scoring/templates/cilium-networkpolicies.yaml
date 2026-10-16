@@ -1,0 +1,209 @@
+{{- if and .Values.networkPolicy.enabled .Values.security.protectedProcessing.enabled }}
+{{- $p := .Values.security.protectedProcessing -}}
+{{- $cd := $p.clusterDomain -}}
+{{- $ns := .Release.Namespace -}}
+{{- $pgSvc := $p.allowedServices.postgres -}}
+{{- $s3Svc := $p.allowedServices.minio -}}
+{{- $pgFqdn := include "dq-scoring.svcFqdn" (dict "svc" $pgSvc "cd" $cd) -}}
+{{- $s3Fqdn := include "dq-scoring.svcFqdn" (dict "svc" $s3Svc "cd" $cd) -}}
+{{- $k8sFqdn := printf "kubernetes.default.svc.%s" $cd -}}
+{{- $pgNames := list $pgSvc.name (printf "%s.%s" $pgSvc.name $pgSvc.namespace) (printf "%s.%s.svc" $pgSvc.name $pgSvc.namespace) $pgFqdn -}}
+{{- $s3Names := list $s3Svc.name (printf "%s.%s" $s3Svc.name $s3Svc.namespace) (printf "%s.%s.svc" $s3Svc.name $s3Svc.namespace) $s3Fqdn -}}
+{{- $k8sNames := list "kubernetes" "kubernetes.default" "kubernetes.default.svc" $k8sFqdn -}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-default-deny
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-api
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  ingress:
+    - fromEndpoints:
+        {{- include "dq-scoring.cnpEndpoint" (dict "ns" $p.allowedServices.ingressController.namespace "labels" $p.allowedServices.ingressController.podSelector) | nindent 8 }}
+      toPorts:
+        - ports:
+            - port: {{ .Values.api.port | quote }}
+              protocol: TCP
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: {{ .Values.api.port | quote }}
+              protocol: TCP
+  egress:
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names)) | nindent 4 }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $pgSvc) | nindent 4 }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+{{- if .Values.ui.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-ui
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ui
+  ingress:
+    - fromEndpoints:
+        {{- include "dq-scoring.cnpEndpoint" (dict "ns" $p.allowedServices.ingressController.namespace "labels" $p.allowedServices.ingressController.podSelector) | nindent 8 }}
+      toPorts:
+        - ports:
+            - port: {{ .Values.ui.port | quote }}
+              protocol: TCP
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: {{ .Values.ui.port | quote }}
+              protocol: TCP
+  egress: []
+{{- end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-import
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: import
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: import
+  ingress: []
+  egress:
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names)) | nindent 4 }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $pgSvc) | nindent 4 }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-driver
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            spark-role: executor
+            dq-scoring/protected: "true"
+      toPorts:
+        - ports:
+            - port: "7078"
+              protocol: TCP
+            - port: "7079"
+              protocol: TCP
+  egress:
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names $k8sNames)) | nindent 4 }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $pgSvc) | nindent 4 }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+    - toCIDRSet:
+        {{- range $p.kubernetesApiCIDRs }}
+        - cidr: {{ . | quote }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: {{ $p.kubernetesApiPort | quote }}
+              protocol: TCP
+            {{- if ne (int $p.kubernetesApiPort) 443 }}
+            - port: "443"
+              protocol: TCP
+            {{- end }}
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: {{ $p.kubernetesApiPort | quote }}
+              protocol: TCP
+            {{- if ne (int $p.kubernetesApiPort) 443 }}
+            - port: "443"
+              protocol: TCP
+            {{- end }}
+    - toEndpoints:
+        - matchLabels:
+            spark-role: executor
+            dq-scoring/protected: "true"
+      toPorts:
+        - ports:
+            - port: "7079"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-executor
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+spec:
+  endpointSelector:
+    matchLabels:
+      spark-role: executor
+      dq-scoring/protected: "true"
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: worker
+        - matchLabels:
+            spark-role: executor
+            dq-scoring/protected: "true"
+      toPorts:
+        - ports:
+            - port: "7079"
+              protocol: TCP
+  egress:
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" $s3Names) | nindent 4 }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: worker
+      toPorts:
+        - ports:
+            - port: "7078"
+              protocol: TCP
+            - port: "7079"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            spark-role: executor
+            dq-scoring/protected: "true"
+      toPorts:
+        - ports:
+            - port: "7079"
+              protocol: TCP
+{{- end }}

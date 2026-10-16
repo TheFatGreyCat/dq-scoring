@@ -1,0 +1,158 @@
+{{- if .Values.workers.enabled }}
+{{- $root := . -}}
+{{- range $laneName, $laneConfig := dict "fast" .Values.workers.fastLane "heavy" .Values.workers.heavyLane "scheduled" .Values.workers.scheduledLane }}
+{{- if $laneConfig.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dq-scoring.fullname" $root }}-worker-{{ $laneName }}
+  labels:
+    {{- include "dq-scoring.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: worker
+    dq-scoring/lane: {{ $laneName }}
+spec:
+  replicas: {{ $laneConfig.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "dq-scoring.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: worker
+      dq-scoring/lane: {{ $laneName }}
+  template:
+    metadata:
+      labels:
+        {{- include "dq-scoring.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: worker
+        dq-scoring/lane: {{ $laneName }}
+    spec:
+      terminationGracePeriodSeconds: {{ $root.Values.workers.terminationGracePeriodSeconds | default 120 }}
+      serviceAccountName: {{ include "dq-scoring.fullname" $root }}-spark
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        {{- if $root.Values.security.protectedProcessing.enabled }}
+        seccompProfile:
+          type: RuntimeDefault
+        {{- end }}
+      containers:
+        - name: worker
+          {{- if $root.Values.security.protectedProcessing.enabled }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          {{- end }}
+          image: "{{ $root.Values.sparkImage.repository }}:{{ $root.Values.sparkImage.tag }}"
+          imagePullPolicy: {{ $root.Values.sparkImage.pullPolicy }}
+          command:
+            - /opt/dq/.venv/bin/python
+            - -m
+            - dq_scoring.workers.daemon
+          envFrom:
+            - configMapRef:
+                name: {{ include "dq-scoring.fullname" $root }}-config
+          env:
+            - name: DQ_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DQ_WORKER_LANE
+              value: {{ $laneName | quote }}
+            - name: DQ_WORKER_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.postgres.workerDsnSecret }}
+                  key: {{ $root.Values.postgres.dsnKey }}
+            - name: DQ_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.minio.existingSecret }}
+                  key: {{ $root.Values.minio.accessKeyIdKey }}
+            - name: DQ_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.minio.existingSecret }}
+                  key: {{ $root.Values.minio.secretAccessKeyKey }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.minio.existingSecret }}
+                  key: {{ $root.Values.minio.accessKeyIdKey }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.minio.existingSecret }}
+                  key: {{ $root.Values.minio.secretAccessKeyKey }}
+            - name: DQ_SPARK_DRIVER_HOST
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+            - name: DQ_SPARK_DRIVER_POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            {{- if $root.Values.security.protectedProcessing.enabled }}
+            - name: SPARK_CONF_DIR
+              value: /opt/spark/conf
+            {{- range $env, $key := dict "_SPARK_SSL_RPC_KEY_PASSWORD" "key-password" "_SPARK_SSL_RPC_KEY_STORE_PASSWORD" "keystore-password" "_SPARK_SSL_RPC_TRUST_STORE_PASSWORD" "truststore-password" }}
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.security.protectedProcessing.sparkSecuritySecret }}
+                  key: {{ $key }}
+            {{- end }}
+            - name: DQ_IMPORT_TEMP_ROOT
+              value: "/opt/dq/scratch"
+            - name: SPARK_LOCAL_DIRS
+              value: "/opt/dq/scratch"
+            {{- end }}
+          ports:
+            - name: spark-driver
+              containerPort: 7078
+            - name: spark-blockmgr
+              containerPort: 7079
+          resources:
+            {{- toYaml $laneConfig.resources | nindent 12 }}
+          volumeMounts:
+            {{- if $root.Values.security.protectedProcessing.enabled }}
+            - name: scratch
+              mountPath: /opt/dq/scratch
+            - name: security
+              mountPath: /opt/dq/security
+              readOnly: true
+            - name: spark-defaults
+              mountPath: /opt/spark/conf/spark-defaults.conf
+              subPath: spark-defaults.conf
+              readOnly: true
+            {{- else }}
+            - name: spark-config
+              mountPath: /opt/spark/conf/spark-defaults.conf
+              subPath: spark-defaults.conf
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if $root.Values.security.protectedProcessing.enabled }}
+        - name: scratch
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ $root.Values.security.protectedProcessing.scratchSizeLimit }}
+        {{- include "dq-scoring.projectedSecurity" (dict "p" $root.Values.security.protectedProcessing "apiTls" false "spark" true) | nindent 8 }}
+        - name: spark-defaults
+          secret:
+            secretName: {{ $root.Values.security.protectedProcessing.sparkSecuritySecret }}
+            items:
+              - key: spark-defaults.conf
+                path: spark-defaults.conf
+        {{- else }}
+        - name: spark-config
+          configMap:
+            name: {{ include "dq-scoring.fullname" $root }}-spark-config
+        {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dq-spark-config
+data:
+  DQ_SPARK_MASTER: k8s://https://kubernetes.default.svc:443
+  DQ_SPARK_DRIVER_MEMORY: 1024m
+  DQ_SPARK_DRIVER_MEMORY_OVERHEAD: 256m
+  DQ_SPARK_EXECUTOR_MEMORY: 1536m
+  DQ_SPARK_EXECUTOR_MEMORY_OVERHEAD: 384m
+  DQ_SPARK_EXECUTOR_INSTANCES: "1"
+  DQ_SPARK_MAX_MEMORY_MB: "4096"
+  DQ_SPARK_KUBERNETES_NAMESPACE: dq-scoring
+  DQ_S3_ENDPOINT_URL: http://minio.dq-scoring.svc:9000
+  DQ_S3_REGION: us-east-1
+  DQ_S3_BUCKET_STAGING: dq-staging-local
+  DQ_S3_BUCKET_SNAPSHOTS: dq-snapshots-local
+  DQ_S3_BUCKET_ARTIFACTS: dq-artifacts-local
+  DQ_SPARK_KUBERNETES_EXECUTOR_IMAGE: dq-scoring-spark:dev
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dq-spark-defaults
+data:
+  spark-defaults.conf: |
+    spark.kubernetes.executor.secretKeyRef.AWS_ACCESS_KEY_ID dq-minio-secret:access_key
+    spark.kubernetes.executor.secretKeyRef.AWS_SECRET_ACCESS_KEY dq-minio-secret:secret_key

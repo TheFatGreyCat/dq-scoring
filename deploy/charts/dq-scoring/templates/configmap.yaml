@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-config
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+data:
+  DQ_APP_ENV: {{ .Values.global.appEnv | quote }}
+  DQ_POSTGRES_HOST: {{ .Values.postgres.host | quote }}
+  DQ_POSTGRES_PORT: {{ .Values.postgres.port | quote }}
+  DQ_POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  DQ_POSTGRES_USER: {{ .Values.postgres.username | quote }}
+  DQ_POSTGRES_POOL_SIZE: {{ .Values.postgres.poolSize | quote }}
+  DQ_POSTGRES_MAX_OVERFLOW: {{ .Values.postgres.maxOverflow | quote }}
+  DQ_S3_ENDPOINT_URL: {{ .Values.minio.endpoint | quote }}
+  DQ_S3_REGION: {{ .Values.minio.region | quote }}
+  DQ_S3_USE_SSL: {{ .Values.minio.useSsl | quote }}
+  DQ_S3_BUCKET_STAGING: {{ .Values.minio.buckets.staging | quote }}
+  DQ_S3_BUCKET_SNAPSHOTS: {{ .Values.minio.buckets.snapshots | quote }}
+  DQ_S3_BUCKET_ARTIFACTS: {{ .Values.minio.buckets.artifacts | quote }}
+  DQ_AUTH_ALGORITHM: {{ .Values.security.jwtAlgorithm | quote }}
+  DQ_AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: {{ .Values.security.accessTokenExpireMinutes | quote }}
+  DQ_AUTH_REFRESH_TOKEN_EXPIRE_DAYS: {{ .Values.security.refreshTokenExpireDays | quote }}
+  DQ_MAX_SAMPLE_ROWS: {{ .Values.security.maxSampleRows | quote }}
+  DQ_MAX_EVIDENCE_BYTES: {{ .Values.security.maxEvidenceBytes | quote }}
+  DQ_EVIDENCE_REDACT_PII: {{ .Values.security.redactPii | quote }}
+  DQ_SPARK_MASTER: {{ .Values.spark.master | default "k8s://https://kubernetes.default.svc:443" | quote }}
+  DQ_SPARK_DRIVER_MEMORY: "1024m"
+  DQ_SPARK_EXECUTOR_MEMORY: "1536m"
+  DQ_SPARK_MAX_MEMORY_MB: "4096"
+  DQ_SPARK_SQL_SHUFFLE_PARTITIONS: "4"
+  DQ_SPARK_KUBERNETES_NAMESPACE: {{ .Release.Namespace | quote }}
+  DQ_SPARK_KUBERNETES_SERVICE_ACCOUNT: {{ printf "%s-spark" (include "dq-scoring.fullname" .) | quote }}
+  DQ_SPARK_KUBERNETES_EXECUTOR_IMAGE: "{{ .Values.sparkImage.repository }}:{{ .Values.sparkImage.tag }}"
+  DQ_PROTECTED_PROCESSING_ENABLED: {{ if .Values.security.protectedProcessing.enabled }}"true"{{ else }}"false"{{ end }}
+{{- if .Values.security.protectedProcessing.enabled }}
+  DQ_S3_CA_BUNDLE: "/opt/dq/security/s3-ca.pem"
+  DQ_IMPORT_TEMP_ROOT: "/opt/dq/scratch"
+  DQ_SPARK_SECURITY_SECRET: {{ .Values.security.protectedProcessing.sparkSecuritySecret | quote }}
+{{- end }}

@@ -1,0 +1,207 @@
+# ==============================================================================
+# DQ Scoring System — Default Helm Values (Reference k3s 8 GB RAM Budget)
+# ==============================================================================
+
+global:
+  appEnv: development
+  namespace: dq-scoring
+  sparkNamespace: spark-apps
+
+image:
+  repository: dq-scoring
+  tag: "v0.1.0"
+  pullPolicy: IfNotPresent
+
+sparkImage:
+  repository: dq-scoring-spark
+  tag: "dev"
+  pullPolicy: IfNotPresent
+
+postgres:
+  host: postgres-cluster-rw.dq-scoring.svc
+  port: 5432
+  database: dq_scoring
+  username: dq_scoring
+  existingSecret: dq-postgres-secret
+  secretPasswordKey: password
+  poolSize: 10
+  maxOverflow: 5
+  apiDsnSecret: dq-api-postgres
+  workerDsnSecret: dq-worker-postgres
+  dsnKey: dsn
+
+minio:
+  endpoint: http://minio.dq-scoring.svc:9000
+  existingSecret: dq-minio-secret
+  accessKeyIdKey: access_key
+  secretAccessKeyKey: secret_key
+  region: us-east-1
+  useSsl: false
+  buckets:
+    staging: dq-staging-local
+    snapshots: dq-snapshots-local
+    artifacts: dq-artifacts-local
+
+security:
+  jwtAlgorithm: HS256
+  existingSecret: dq-auth-secret
+  jwtSecretKey: jwt_secret
+  accessTokenExpireMinutes: 30
+  refreshTokenExpireDays: 14
+  maxSampleRows: 50
+  maxEvidenceBytes: 512000
+  redactPii: true
+  # Protected processing profile (Kubernetes/k3s + Cilium + Traefik). Enable it ONLY through values-secure.yaml;
+  # see docs/engineering/DEPLOYMENT_GUIDE.md section 7.7. Every secret below is an existing Secret provisioned
+  # outside this repository; the chart never renders credential or key material.
+  protectedProcessing:
+    enabled: false
+    clusterDomain: cluster.local
+    # kubernetes.io/tls Secret (tls.crt + tls.key). Mounted only into API pods.
+    apiTlsSecret: ""
+    # Public CAs only. Keys: postgres-ca.pem, s3-ca.pem, tls.ca (CA that signed the API certificate, read by Traefik).
+    caSecret: ""
+    # Spark RPC material mounted only into driver and executors. Keys: rpc-auth, keystore.jks, truststore.jks
+    # (truststore must also trust the S3 CA for S3A), spark-defaults.conf (passwords for the stores only).
+    sparkSecuritySecret: ""
+    # DNS name present in the API certificate SAN; Traefik verifies the backend against it.
+    apiServerName: ""
+    # Memory-backed (tmpfs) scratch for upload/export/import temp files holding real data.
+    # Counts against the container memory limit; size it for the import byte budget. Required, no default.
+    apiScratchSizeLimit: ""
+    scratchSizeLimit: ""
+    dns:
+      namespace: kube-system
+      podSelector: {k8s-app: kube-dns}
+    # Operator-provided CIDRs of the Kubernetes API endpoints reachable by the Spark driver. /0 and metadata ranges are rejected.
+    kubernetesApiCIDRs: []
+    # Backend port the API Service DNATs to (443 on managed clusters, 6443 on k3s). Required, no default.
+    kubernetesApiPort: 0
+    allowedServices:
+      postgres: {name: "", namespace: "", port: 5432, podSelector: {}}
+      minio: {name: "", namespace: "", port: 9000, podSelector: {}}
+      ingressController: {namespace: "", podSelector: {}}
+    # Idle pod carrying executor network identity; lets the preflight probe executor egress without a running job.
+    policyProbe:
+      enabled: true
+
+api:
+  enabled: true
+  replicas: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 8000
+
+ui:
+  # Static SPA (nginx-unprivileged, frontend/Dockerfile). Opt-in: build/push the image, then set enabled: true.
+  enabled: false
+  replicas: 1
+  port: 8080
+  image:
+    repository: dq-scoring-ui
+    tag: "v0.1.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  service:
+    type: ClusterIP
+    port: 8080
+
+workers:
+  enabled: true
+  terminationGracePeriodSeconds: 120
+  # Tri-Lane Bulkhead Partitioning
+  fastLane:
+    enabled: true
+    replicas: 1
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1024Mi
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      maxReplicaCount: 5
+      pollingInterval: 15
+      cooldownPeriod: 120
+      targetQueueValue: 3
+  heavyLane:
+    enabled: true
+    replicas: 1
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 1024Mi
+      limits:
+        cpu: 2000m
+        memory: 2048Mi
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      maxReplicaCount: 2
+      pollingInterval: 15
+      cooldownPeriod: 180
+      targetQueueValue: 1
+  scheduledLane:
+    enabled: true
+    replicas: 1
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1024Mi
+    keda:
+      enabled: true
+      minReplicaCount: 0
+      maxReplicaCount: 3
+      pollingInterval: 30
+      cooldownPeriod: 300
+      targetQueueValue: 2
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+  tls:
+    existingSecret: ""
+  hosts:
+    - host: dq-scoring.local
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: ui
+
+networkPolicy:
+  enabled: true
+
+importWorker:
+  enabled: true
+  resources:
+    requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 1Gi}
+    limits: {memory: 768Mi, ephemeral-storage: 45Gi}
+
+# Spark master used by the driver. Protected processing accepts only k8s:// masters.
+spark:
+  master: k8s://https://kubernetes.default.svc:443

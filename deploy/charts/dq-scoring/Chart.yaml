@@ -1,0 +1,15 @@
+apiVersion: v2
+name: dq-scoring
+description: Production Helm Umbrella Chart for Deterministic Data Quality Scoring System
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - data-quality
+  - apache-spark
+  - postgresql
+  - k3s
+  - keda
+maintainers:
+  - name: DQ Scoring Engineering Team
+    email: dev@dqscoring.local

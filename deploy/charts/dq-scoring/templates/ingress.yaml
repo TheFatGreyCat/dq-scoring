@@ -1,0 +1,45 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if or .Values.ingress.tls.existingSecret .Values.security.protectedProcessing.enabled }}
+  tls:
+    - hosts:
+        {{- range .Values.ingress.hosts }}
+        - {{ .host | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tls.existingSecret | quote }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          {{- $svc := .service | default (ternary "ui" "api" $.Values.ui.enabled) }}
+          {{- if not (has $svc (list "api" "ui")) }}
+          {{- fail (printf "ingress.hosts[].paths[].service must be api or ui, got %q" $svc) }}
+          {{- end }}
+          {{- if or (eq $svc "api") $.Values.ui.enabled }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ printf "%s-%s" (include "dq-scoring.fullname" $) $svc }}
+                port:
+                  number: {{ if eq $svc "api" }}{{ $.Values.api.service.port }}{{ else }}{{ $.Values.ui.service.port }}{{ end }}
+          {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

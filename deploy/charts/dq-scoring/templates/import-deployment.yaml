@@ -1,0 +1,74 @@
+{{- if .Values.importWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-import
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: import
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dq-scoring.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: import
+  template:
+    metadata:
+      labels:
+        {{- include "dq-scoring.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: import
+    spec:
+      {{- if .Values.security.protectedProcessing.enabled }}
+      automountServiceAccountToken: false
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: import
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python, -m, dq_scoring.workers.import_daemon]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          envFrom:
+            - configMapRef: {name: {{ include "dq-scoring.fullname" . }}-config}
+          env:
+            - name: DQ_WORKER_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.postgres.workerDsnSecret }}, key: {{ .Values.postgres.dsnKey }}}
+            - name: DQ_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.minio.existingSecret }}, key: {{ .Values.minio.accessKeyIdKey }}}
+            - name: DQ_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.minio.existingSecret }}, key: {{ .Values.minio.secretAccessKeyKey }}}
+            - name: DQ_IMPORT_TEMP_ROOT
+              value: {{ if .Values.security.protectedProcessing.enabled }}"/opt/dq/scratch"{{ else }}"/scratch/imports"{{ end }}
+          resources:
+            {{- toYaml .Values.importWorker.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.security.protectedProcessing.enabled }}
+            - {name: scratch, mountPath: /opt/dq/scratch}
+            - {name: security, mountPath: /opt/dq/security, readOnly: true}
+            {{- else }}
+            - {name: scratch, mountPath: /scratch}
+            {{- end }}
+      volumes:
+        {{- if .Values.security.protectedProcessing.enabled }}
+        - name: scratch
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.security.protectedProcessing.scratchSizeLimit }}
+        {{- include "dq-scoring.projectedSecurity" (dict "p" .Values.security.protectedProcessing "apiTls" false "spark" false) | nindent 8 }}
+        {{- else }}
+        - name: scratch
+          emptyDir: {sizeLimit: 45Gi}
+        {{- end }}
+{{- end }}

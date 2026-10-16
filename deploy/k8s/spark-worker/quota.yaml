@@ -1,0 +1,22 @@
+# Spark budget on the 8 GB node: driver 1280Mi + 1 executor 1920Mi = 3200Mi <= 4096Mi.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dq-spark-quota
+spec:
+  hard:
+    limits.memory: 4096Mi
+    pods: "3"
+---
+# limits.memory quota rejects pods without a memory limit; give such containers a default.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dq-spark-defaults
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 512Mi
+      defaultRequest:
+        memory: 256Mi

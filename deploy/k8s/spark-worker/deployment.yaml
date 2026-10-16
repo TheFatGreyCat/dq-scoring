@@ -1,0 +1,84 @@
+# Worker daemon = Spark driver in client mode; executors are pods it creates in this namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dq-spark-worker
+  labels:
+    app.kubernetes.io/name: dq-spark-worker
+spec:
+  replicas: 1 # max 1 concurrent Spark run
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dq-spark-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dq-spark-worker
+    spec:
+      serviceAccountName: dq-spark-driver
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: dq-scoring-spark:dev
+          imagePullPolicy: Never
+          command: [/opt/dq/.venv/bin/python, -m, dq_scoring.workers.daemon]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          envFrom:
+            - configMapRef:
+                name: dq-spark-config
+            - secretRef:
+                name: dq-scoring-worker-db
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: dq-minio-secret, key: access_key}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: dq-minio-secret, key: secret_key}
+            - name: DQ_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: dq-minio-secret, key: access_key}
+            - name: DQ_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: dq-minio-secret, key: secret_key}
+            - name: DQ_SPARK_DRIVER_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: DQ_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DQ_SPARK_DRIVER_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports: # executors connect back on these (DQ_SPARK_DRIVER_PORT / DQ_SPARK_BLOCK_MANAGER_PORT)
+            - name: spark-driver
+              containerPort: 7078
+            - name: spark-blockmgr
+              containerPort: 7079
+          resources: # driver 1024m + overhead 256m
+            requests:
+              memory: 1280Mi
+            limits:
+              memory: 1280Mi
+          volumeMounts:
+            - name: spark-config
+              mountPath: /opt/spark/conf/spark-defaults.conf
+              subPath: spark-defaults.conf
+              readOnly: true
+      volumes:
+        - name: spark-config
+          configMap:
+            name: dq-spark-defaults

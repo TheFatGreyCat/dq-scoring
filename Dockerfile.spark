@@ -1,0 +1,24 @@
+FROM apache/spark:4.2.0
+USER root
+COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /usr/local/bin/uv
+RUN apt-get update && apt-get install -y --no-install-recommends python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN curl -fSL https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.5.0/hadoop-aws-3.5.0.jar -o /opt/spark/jars/hadoop-aws-3.5.0.jar \
+ && curl -fSL https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.35.4/bundle-2.35.4.jar -o /opt/spark/jars/bundle-2.35.4.jar \
+ && curl -fSL https://repo1.maven.org/maven2/software/amazon/s3/analyticsaccelerator/analyticsaccelerator-s3/1.3.1/analyticsaccelerator-s3-1.3.1.jar -o /opt/spark/jars/analyticsaccelerator-s3-1.3.1.jar \
+ && curl -fSL https://repo1.maven.org/maven2/org/wildfly/openssl/wildfly-openssl/2.2.5.Final/wildfly-openssl-2.2.5.Final.jar -o /opt/spark/jars/wildfly-openssl-2.2.5.Final.jar
+RUN groupadd -g 10001 dq && useradd -u 10001 -g dq -s /bin/bash -m dq
+WORKDIR /opt/dq
+ENV UV_LINK_MODE=copy UV_PYTHON_INSTALL_DIR=/opt/dq/python
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+# PySpark comes from the image's own $SPARK_HOME/python (matches the JVM); the compute group is not installed.
+RUN uv sync --locked --no-dev --python 3.13 && uv cache clean && chmod -R a+rX /opt/dq && mkdir -p /opt/dq/.tmp && chmod 1777 /opt/dq/.tmp
+RUN mkdir -p /opt/spark/work-dir/local /opt/spark/work-dir/worker && chown -R spark:spark /opt/spark/work-dir
+ENV SPARK_HOME=/opt/spark \
+    PYSPARK_PYTHON=/opt/dq/.venv/bin/python \
+    PYTHONPATH=/opt/dq/src:/opt/spark/python/lib/pyspark.zip:/opt/spark/python/lib/py4j-0.10.9.9-src.zip \
+    PATH=/opt/dq/.venv/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    DQ_IMPORT_TEMP_ROOT=/opt/dq/.tmp/imports
+USER spark
+# Inherited /opt/entrypoint.sh handles executor arguments; do not replace it with the API entrypoint.

@@ -1,0 +1,62 @@
+# Protected-processing overlay (Kubernetes/k3s + Cilium + Traefik CRDs). Use together with an operator values file:
+#   helm template/upgrade --install <release> deploy/charts/dq-scoring -n <ns> \
+#     -f deploy/charts/dq-scoring/values-secure.yaml -f <operator-values>.yaml
+# The operator file MUST supply (the chart fails otherwise, nothing is defaulted):
+#   security.protectedProcessing.{apiTlsSecret,caSecret,sparkSecuritySecret,apiServerName,
+#     apiScratchSizeLimit,scratchSizeLimit,kubernetesApiCIDRs,kubernetesApiPort,allowedServices.*}
+#   postgres.host (exact <service>.<namespace>.svc.<clusterDomain>), minio.endpoint (https, same form),
+#   ingress.hosts, ingress.tls.existingSecret, importWorker/api memory limits that cover the tmpfs scratch.
+# Secrets are provisioned outside the repository; no credential value belongs in any values file.
+# sparkSecuritySecret requires rpc-auth, rpc-auth-base64 (base64 text of rpc-auth), keystore.jks,
+# truststore.jks, spark-defaults.conf, key-password, keystore-password and truststore-password.
+# Native _SPARK_AUTH_SECRET / _SPARK_SSL_RPC_* environment variables bootstrap executor RPC
+# before driver properties can be fetched; values are injected only through secretKeyRef.
+global:
+  appEnv: production
+
+spark:
+  master: k8s://https://kubernetes.default.svc.cluster.local:443
+
+minio:
+  useSsl: true
+
+security:
+  protectedProcessing:
+    enabled: true
+
+ingress:
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+
+# Static UI is opt-in: set ui.enabled=true plus ui.image.* in the operator file. Its CiliumNetworkPolicy admits only
+# the ingressController pods on ui.port and denies all egress; the HTTPS backend transport applies to the API Service only.
+ui:
+  enabled: false
+
+workers:
+  fastLane:
+    keda: {enabled: false}
+    resources:
+      limits: {memory: 26Gi}
+      requests: {cpu: 200m, memory: 512Mi}
+  heavyLane:
+    keda: {enabled: false}
+    resources:
+      limits: {memory: 28Gi}
+      requests: {cpu: 500m, memory: 1024Mi}
+  scheduledLane:
+    keda: {enabled: false}
+    resources:
+      limits: {memory: 26Gi}
+      requests: {cpu: 200m, memory: 512Mi}
+
+api:
+  resources:
+    limits: {memory: 26Gi}
+    requests: {cpu: 200m, memory: 512Mi}
+
+importWorker:
+  resources:
+    limits: {memory: 26Gi}
+    requests: {cpu: 100m, memory: 512Mi}

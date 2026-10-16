@@ -1,0 +1,39 @@
+{{- if and .Values.networkPolicy.enabled (not .Values.security.protectedProcessing.enabled) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-deny-cloud-metadata
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow all traffic EXCEPT AWS/cloud metadata IP (169.254.169.254/32) to prevent SSRF (AC-024)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dq-scoring.fullname" . }}-api-ingress
+  labels:
+    {{- include "dq-scoring.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dq-scoring.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.port }}
+{{- end }}

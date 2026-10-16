@@ -1,0 +1,26 @@
+# The worker pod is the Spark driver (client mode): it creates and deletes executor pods.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dq-spark-driver
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dq-spark-driver
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, persistentvolumeclaims]
+    verbs: [create, get, list, watch, delete, deletecollection, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dq-spark-driver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dq-spark-driver
+subjects:
+  - kind: ServiceAccount
+    name: dq-spark-driver

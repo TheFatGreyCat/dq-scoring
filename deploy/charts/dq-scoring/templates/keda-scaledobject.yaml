@@ -1,0 +1,36 @@
+{{- if .Values.workers.enabled }}
+{{- $root := . -}}
+{{- range $laneName, $laneConfig := dict "fast" .Values.workers.fastLane "heavy" .Values.workers.heavyLane "scheduled" .Values.workers.scheduledLane }}
+{{- if and $laneConfig.enabled $laneConfig.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "dq-scoring.fullname" $root }}-scaledobject-{{ $laneName }}
+  labels:
+    {{- include "dq-scoring.labels" $root | nindent 4 }}
+    dq-scoring/lane: {{ $laneName }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "dq-scoring.fullname" $root }}-worker-{{ $laneName }}
+  minReplicaCount: {{ $laneConfig.keda.minReplicaCount }}
+  maxReplicaCount: {{ $laneConfig.keda.maxReplicaCount }}
+  pollingInterval: {{ $laneConfig.keda.pollingInterval }}
+  cooldownPeriod: {{ $laneConfig.keda.cooldownPeriod }}
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: DQ_WORKER_POSTGRES_DSN
+        targetQueryValue: {{ $laneConfig.keda.targetQueueValue | quote }}
+        {{- if eq $laneName "fast" }}
+        query: "SELECT count(*) FROM evaluation_runs WHERE run_status = 'QUEUED' AND (workload_tier = 'SMALL' OR workload_tier IS NULL) AND trigger_type != 'SCHEDULED';"
+        {{- else if eq $laneName "heavy" }}
+        query: "SELECT count(*) FROM evaluation_runs WHERE run_status = 'QUEUED' AND workload_tier = 'LARGE' AND trigger_type != 'SCHEDULED';"
+        {{- else }}
+        query: "SELECT count(*) FROM evaluation_runs WHERE run_status = 'QUEUED' AND trigger_type = 'SCHEDULED';"
+        {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
