@@ -1,0 +1,622 @@
+{
+  "pack_code": "FINANCE_QUALITY_V1",
+  "revision": 1,
+  "templates": [
+    {
+      "template_code": "FINANCE_TRANSACTION_ID_REQUIRED",
+      "name": "Financial Transaction Identifier Required",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Enforce presence of unique transaction tracking identifier",
+      "description": "Validates that every financial transaction record contains a non-null transaction identifier",
+      "rules_payload": [
+        {
+          "rule_code": "transaction_id_not_null",
+          "dimension": "COMPLETENESS",
+          "rule_type": "NON_NULL",
+          "parameters": {
+            "column": "$transaction_id"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 1.1 - Transaction Identity Integrity",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to transaction events requiring an immutable identity reference"
+      },
+      "placeholder_schema": {
+        "$transaction_id": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"txn_id": "TXN_1001"},
+          "bindings": {"$transaction_id": "txn_id"},
+          "expected": {"transaction_id_not_null": "passed"}
+        },
+        {
+          "input": {"txn_id": null},
+          "bindings": {"$transaction_id": "txn_id"},
+          "expected": {"transaction_id_not_null": "missing"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_TRANSACTION_ID_UNIQUE",
+      "name": "Financial Transaction Identifier Uniqueness",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Prevent duplicate transaction processing across ledgers",
+      "description": "Ensures that transaction identifiers are strictly unique across records",
+      "rules_payload": [
+        {
+          "rule_code": "transaction_id_unique",
+          "dimension": "UNIQUENESS",
+          "rule_type": "UNIQUENESS",
+          "parameters": {
+            "column": "$transaction_id"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 1.2 - Deduplication Controls",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to transaction datasets where duplicate tracking keys indicate replay"
+      },
+      "placeholder_schema": {
+        "$transaction_id": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"txn_id": "TXN_1001"},
+          "bindings": {"$transaction_id": "txn_id"},
+          "expected": {"transaction_id_unique": "passed"}
+        },
+        {
+          "input": {"txn_id": "TXN_1001"},
+          "bindings": {"$transaction_id": "txn_id"},
+          "expected": {"transaction_id_unique": "failed"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_EVENT_TIME_PARSE",
+      "name": "Financial Event Time Timestamp Parse",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Standardize event timestamps for chronological ledger sorting",
+      "description": "Validates that transaction timestamps conform to canonical timestamp format",
+      "rules_payload": [
+        {
+          "rule_code": "event_time_parse",
+          "dimension": "VALIDITY",
+          "rule_type": "TYPE_PARSE",
+          "parameters": {
+            "column": "$event_time",
+            "data_type": "TIMESTAMP",
+            "format": "yyyy-MM-dd HH:mm:ss"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 2.1 - Temporal Parsing",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to event logs with ISO/SQL timestamp formatting"
+      },
+      "placeholder_schema": {
+        "$event_time": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"event_ts": "2026-10-15 10:30:00"},
+          "bindings": {"$event_time": "event_ts"},
+          "expected": {"event_time_parse": "passed"}
+        },
+        {
+          "input": {"event_ts": "invalid-time"},
+          "bindings": {"$event_time": "event_ts"},
+          "expected": {"event_time_parse": "miscast"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_AMOUNT_PARSE",
+      "name": "Financial Transaction Amount Numeric Parse",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Verify monetary amount field can be parsed as a floating-point number",
+      "description": "Validates parseability of transaction monetary values as double-precision numbers",
+      "rules_payload": [
+        {
+          "rule_code": "amount_parse",
+          "dimension": "VALIDITY",
+          "rule_type": "TYPE_PARSE",
+          "parameters": {
+            "column": "$amount",
+            "data_type": "DOUBLE"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 2.2 - Numeric Monetary Types",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to raw string inputs representing numeric amounts"
+      },
+      "placeholder_schema": {
+        "$amount": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"amount": "100.50"},
+          "bindings": {"$amount": "amount"},
+          "expected": {"amount_parse": "passed"}
+        },
+        {
+          "input": {"amount": "not_numeric"},
+          "bindings": {"$amount": "amount"},
+          "expected": {"amount_parse": "miscast"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_NONNEGATIVE_CASHFLOW",
+      "name": "Non-negative Cash Flow Amount",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Enforce non-negative amounts on positive-only cash flow streams",
+      "description": "Asserts amount is greater than or equal to zero for unidirectional cash receipts",
+      "rules_payload": [
+        {
+          "rule_code": "amount_nonnegative",
+          "dimension": "VALIDITY",
+          "rule_type": "DOMAIN_RANGE",
+          "parameters": {
+            "column": "$amount",
+            "min": 0
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 2.3 - Non-negative Cash Flow Bounds",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Restricted strictly to gross receipts or unidirectional payment streams; do not apply to signed journal ledgers"
+      },
+      "placeholder_schema": {
+        "$amount": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"amount": 250.0},
+          "bindings": {"$amount": "amount"},
+          "expected": {"amount_nonnegative": "passed"}
+        },
+        {
+          "input": {"amount": -10.0},
+          "bindings": {"$amount": "amount"},
+          "expected": {"amount_nonnegative": "failed"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_CURRENCY_ALLOWED",
+      "name": "Approved Currency Code Membership",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Restrict transaction currencies to an approved owner-supplied list",
+      "description": "Validates currency code values against an allowable set supplied by data owner",
+      "rules_payload": [
+        {
+          "rule_code": "currency_allowed",
+          "dimension": "VALIDITY",
+          "rule_type": "DOMAIN_RANGE",
+          "parameters": {
+            "column": "$currency",
+            "allowed_values": "$currencies"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 3.1 - Allowed Currencies List",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to ISO 4217 currency columns with configured operational currencies"
+      },
+      "placeholder_schema": {
+        "$currency": {
+          "type": "COLUMN",
+          "required": true
+        },
+        "$currencies": {
+          "type": "STRING_ARRAY",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"currency": "VND"},
+          "bindings": {
+            "$currency": "currency",
+            "$currencies": ["VND", "USD"]
+          },
+          "expected": {"currency_allowed": "passed"}
+        },
+        {
+          "input": {"currency": "EUR"},
+          "bindings": {
+            "$currency": "currency",
+            "$currencies": ["VND", "USD"]
+          },
+          "expected": {"currency_allowed": "failed"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_ACCOUNT_REQUIRED",
+      "name": "Financial Account Identifier Required",
+      "domain": "FINANCE",
+      "data_type": "MASTER_DATA",
+      "target_use_case": "Ensure account identifiers are populated across master data tables",
+      "description": "Verifies that account records have a non-null account identifier",
+      "rules_payload": [
+        {
+          "rule_code": "account_id_not_null",
+          "dimension": "COMPLETENESS",
+          "rule_type": "NON_NULL",
+          "parameters": {
+            "column": "$account_id"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 4.1 - Account Master Records",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to customer and balance sheets where account ID is primary reference"
+      },
+      "placeholder_schema": {
+        "$account_id": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"account_id": "ACC-9988"},
+          "bindings": {"$account_id": "account_id"},
+          "expected": {"account_id_not_null": "passed"}
+        },
+        {
+          "input": {"account_id": null},
+          "bindings": {"$account_id": "account_id"},
+          "expected": {"account_id_not_null": "missing"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_BALANCED_TOTALS",
+      "name": "Balanced Debit and Credit Totals",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Verify that debit and credit amounts balance on single-row journal entries",
+      "description": "Asserts equality between debit and credit totals for balanced row entries",
+      "rules_payload": [
+        {
+          "rule_code": "debit_credit_balanced",
+          "dimension": "CONSISTENCY",
+          "rule_type": "CROSS_FIELD",
+          "parameters": {
+            "column": "$debit_column",
+            "comparison_column": "$credit_column",
+            "operator": "EQ",
+            "data_type": "DOUBLE"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 5.1 - Double-entry Row Balancing",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies strictly to row schemas representing balanced transaction totals"
+      },
+      "placeholder_schema": {
+        "$debit_column": {
+          "type": "COLUMN",
+          "required": true
+        },
+        "$credit_column": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"debit": "500.0", "credit": "500.0"},
+          "bindings": {"$debit_column": "debit", "$credit_column": "credit"},
+          "expected": {"debit_credit_balanced": "passed"}
+        },
+        {
+          "input": {"debit": "500.0", "credit": "450.0"},
+          "bindings": {"$debit_column": "debit", "$credit_column": "credit"},
+          "expected": {"debit_credit_balanced": "failed"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_SETTLEMENT_ORDER",
+      "name": "Settlement Time Follows Event Time",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Verify settlement timestamp is equal to or greater than transaction initiation timestamp",
+      "description": "Cross-field comparison verifying settlement_time >= event_time",
+      "rules_payload": [
+        {
+          "rule_code": "settlement_order",
+          "dimension": "CONSISTENCY",
+          "rule_type": "CROSS_FIELD",
+          "parameters": {
+            "column": "$settlement_time",
+            "comparison_column": "$event_time",
+            "operator": ">=",
+            "data_type": "TIMESTAMP"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 5.2 - Settlement Chronology",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to cleared transaction events tracking both initiation and clearing timestamps"
+      },
+      "placeholder_schema": {
+        "$settlement_time": {
+          "type": "COLUMN",
+          "required": true
+        },
+        "$event_time": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"settle_ts": "2026-10-15 12:00:00", "event_ts": "2026-10-15 10:00:00"},
+          "bindings": {"$settlement_time": "settle_ts", "$event_time": "event_ts"},
+          "expected": {"settlement_order": "passed"}
+        },
+        {
+          "input": {"settle_ts": "2026-10-15 08:00:00", "event_ts": "2026-10-15 10:00:00"},
+          "bindings": {"$settlement_time": "settle_ts", "$event_time": "event_ts"},
+          "expected": {"settlement_order": "failed"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_EXPIRY_ORDER",
+      "name": "Instrument Expiry Date Follows Issue Date",
+      "domain": "FINANCE",
+      "data_type": "MASTER_DATA",
+      "target_use_case": "Verify instrument maturity or card expiry date is on or after issue date",
+      "description": "Cross-field date comparison verifying expiry_date >= issue_date",
+      "rules_payload": [
+        {
+          "rule_code": "expiry_order",
+          "dimension": "CONSISTENCY",
+          "rule_type": "CROSS_FIELD",
+          "parameters": {
+            "column": "$expiry_date",
+            "comparison_column": "$issue_date",
+            "operator": ">=",
+            "data_type": "DATE",
+            "format": "yyyy-MM-dd"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 5.3 - Instrument Lifecycle Chronology",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to securities, contracts, or cards with issue and expiry dates"
+      },
+      "placeholder_schema": {
+        "$expiry_date": {
+          "type": "COLUMN",
+          "required": true
+        },
+        "$issue_date": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"exp_date": "2027-10-15", "iss_date": "2026-10-15"},
+          "bindings": {"$expiry_date": "exp_date", "$issue_date": "iss_date"},
+          "expected": {"expiry_order": "passed"}
+        },
+        {
+          "input": {"exp_date": "2025-10-15", "iss_date": "2026-10-15"},
+          "bindings": {"$expiry_date": "exp_date", "$issue_date": "iss_date"},
+          "expected": {"expiry_order": "failed"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_TEXT_ENCODING",
+      "name": "Financial Description Character Encoding Integrity",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Detect corrupt character replacement characters in payment memos",
+      "description": "Text quality check catching U+FFFD replacement markers in narrative fields",
+      "rules_payload": [
+        {
+          "rule_code": "memo_encoding",
+          "dimension": "VALIDITY",
+          "rule_type": "TEXT_QUALITY",
+          "parameters": {
+            "column": "$description",
+            "check": "REPLACEMENT_CHARACTER"
+          },
+          "null_policy": "fail"
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 6.1 - Text Encoding Quality",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Applies to payment descriptions, remarks, and remittance narratives"
+      },
+      "placeholder_schema": {
+        "$description": {
+          "type": "COLUMN",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"memo": "Chuyen tien thanh toan"},
+          "bindings": {"$description": "memo"},
+          "expected": {"memo_encoding": "passed"}
+        },
+        {
+          "input": {"memo": "Chuyen tien \ufffd thanh toan"},
+          "bindings": {"$description": "memo"},
+          "expected": {"memo_encoding": "failed"}
+        }
+      ]
+    },
+    {
+      "template_code": "FINANCE_TEXT_SPELLING",
+      "name": "Financial Description Advisory Spelling Membership",
+      "domain": "FINANCE",
+      "data_type": "TRANSACTION_EVENT",
+      "target_use_case": "Flag unlisted tokens in payment narratives against pinned dictionary",
+      "description": "Advisory text dictionary membership verification for payment narratives",
+      "rules_payload": [
+        {
+          "rule_code": "memo_spelling_advisory",
+          "dimension": "VALIDITY",
+          "rule_type": "SPELLING",
+          "parameters": {
+            "column": "$description",
+            "language": "vi-en",
+            "dictionary_revision": "$dictionary_revision",
+            "accepted_terms": ["fintech", "napas", "pos", "qr"]
+          },
+          "null_policy": "ignore",
+          "is_advisory": true
+        }
+      ],
+      "provenance": {
+        "kind": "ENGINEERING_CONVENTION",
+        "source_uri": "https://github.com/fastcat/dq-scoring/tree/main/src/dq_scoring/data/templates/finance_quality_v1.json",
+        "source_title": "Financial Transaction Quality Engineering Standards",
+        "source_version": "1.0",
+        "source_section": "Section 6.2 - Narrative Lexicon Advisory",
+        "retrieved_at": "2026-10-15T00:00:00Z",
+        "license": "MIT",
+        "applicability": "Advisory-only quality signals; unrecognized tokens indicate atypical narrative rather than verified lexical error"
+      },
+      "placeholder_schema": {
+        "$description": {
+          "type": "COLUMN",
+          "required": true
+        },
+        "$dictionary_revision": {
+          "type": "STRING",
+          "required": true
+        }
+      },
+      "examples": [
+        {
+          "input": {"memo": "payment qr"},
+          "bindings": {
+            "$description": "memo",
+            "$dictionary_revision": "synthetic-v1"
+          },
+          "expected": {"memo_spelling_advisory": "passed"}
+        },
+        {
+          "input": {"memo": "xyzqwekjlasd"},
+          "bindings": {
+            "$description": "memo",
+            "$dictionary_revision": "synthetic-v1"
+          },
+          "expected": {"memo_spelling_advisory": "failed"}
+        }
+      ]
+    }
+  ]
+}
