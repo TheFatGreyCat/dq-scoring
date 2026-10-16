@@ -1,8 +1,8 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: dq-scoring
-  namespace: argocd
+  name: dq-staging
+  namespace: argocd-staging
   labels:
     app.kubernetes.io/name: dq-scoring
     app.kubernetes.io/part-of: dq-scoring-platform
@@ -11,15 +11,17 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/org/dq-scoring.git
-    targetRevision: HEAD
+    repoURL: git@github.com:TheFatGreyCat/dq-scoring.git
+    targetRevision: overview-scratch-20261016
     path: deploy/charts/dq-scoring
     helm:
+      releaseName: dq
       valueFiles:
         - values.yaml
+        - values-staging.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: dq-scoring
+    namespace: dq-staging
   syncPolicy:
     automated:
       prune: true

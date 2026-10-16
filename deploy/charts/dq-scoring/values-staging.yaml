@@ -1,20 +1,43 @@
-# Staging environment overrides for DQ Scoring Helm Chart
+# Existing single-node staging Application profile; credentials remain in existing Secrets.
 global:
-  appEnv: staging
+  namespace: dq-staging
+  sparkNamespace: dq-staging
+
+image:
+  repository: localhost:5000/dq-scoring-api
+  tag: overview-scratch-20261016-1818@sha256:803d9c129d9a4b874ef077b717df7162f9f2483cad6c9ee79ae7a063334a01eb
+  pullPolicy: Always
+
+sparkImage:
+  repository: localhost:5000/dq-scoring-spark
+  tag: staging@sha256:59ef835921915c618c6b7992ac72fdd0f9a831ea5a300283d153cc06417ca60b
+
+postgres:
+  host: postgres
+minio:
+  endpoint: http://minio:9000
 
 api:
-  replicas: 2
-  resources:
-    limits:
-      memory: 1024Mi
+  replicas: 1
 
+ui:
+  enabled: true
+  image:
+    repository: localhost:5000/dq-scoring-ui
+    tag: staging@sha256:539c1fee208f2883de8ed6b7b32b1c719528473797f3482560fe5e1b975473df
+
+workers:
+  fastLane:
+    resources:
+      requests: {cpu: 250m, memory: 1Gi}
+      limits: {cpu: '2', memory: 4Gi}
+    keda: {enabled: false}
+  heavyLane: {enabled: false}
+  scheduledLane: {enabled: false}
+
+networkPolicy:
+  enabled: false
 ingress:
-  hosts:
-    - host: dq-scoring.staging.internal
-      paths:
-        - path: /api
-          pathType: Prefix
-          service: api
-        - path: /
-          pathType: Prefix
-          service: ui
+  enabled: false
+spark:
+  master: k8s://https://kubernetes.default.svc:443

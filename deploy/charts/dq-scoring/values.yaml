@@ -89,6 +89,9 @@ api:
   enabled: true
   replicas: 2
   port: 8000
+  # Disk-backed API part spool: 16 MiB per in-flight part by default, removed after forwarding to S3.
+  # Separate from the import daemon's raw/canonical scratch; concurrency must fit this per-pod quota.
+  scratchSizeLimit: 20Gi
   resources:
     requests:
       cpu: 250m

@@ -171,7 +171,7 @@ def overview(user=Depends(get_current_user), conn=Depends(get_db_connection)):
         )
         result["recent_imports"] = [
             ImportSessionSummary.model_validate(_build_session_response(
-                dict(zip(import_keys, row, strict=True)), get_import_settings()
+                dict(zip(import_keys, row, strict=True)), get_import_settings(), conn, user
             ).model_dump()) for row in imports
         ]
     return result

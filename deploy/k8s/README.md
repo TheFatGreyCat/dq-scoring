@@ -100,3 +100,35 @@ python scripts/k3s/check_protected_processing.py \
   --canary-host <synthetic-canary-service> \
   --canary-port 8080
 ```
+
+## Helm staging: scratch, image pinning and reconciliation
+
+`deploy/argocd/application.yaml` manages the existing `argocd-staging/dq-staging` Application.
+It reads `values.yaml` and `values-staging.yaml`; do not retain inline Helm values or patch Deployment
+images/environment variables. Keep credentials in existing Secrets, outside Git.
+
+- Default/staging API: disk-backed `emptyDir` mounted at `/scratch`, with `DQ_IMPORT_TEMP_ROOT=/scratch/imports`.
+  `api.scratchSizeLimit` defaults only in `values.yaml` to `20Gi`; an empty quota fails rendering.
+  The upload maximum is 20 GiB, but API scratch holds individual parts (16 MiB by default), removed after
+  forwarding to S3. Size per-pod quota for concurrent parts and node disk capacity, not merely total upload size.
+  Import daemon raw/canonical processing uses separate scratch and needs its own byte budget.
+- Protected API: tmpfs at `/opt/dq/scratch`; `security.protectedProcessing.apiScratchSizeLimit` is mandatory.
+  CA/TLS files mount read-only. tmpfs consumes container memory: reserve memory for both scratch and the
+  application, not just a memory limit equal to scratch quota. UID/GID/fsGroup remain `10001`.
+- The protected ConfigMap and container both declare the same scratch path; default/staging ConfigMap does
+  not declare it. Do not introduce conflicting values through `envFrom` or imperative `set env`.
+
+Build a unique, never-reused image tag from verified source and push to the node-accessible registry.
+This chart uses Kubernetes-native `tag@sha256:digest` in image tag values; pin API/import, Spark and UI images.
+Record the registry digest, then commit only scoped chart/code/test/documentation files. Create an immutable
+Git tag for that commit, set Application `targetRevision` to that tag, and push commit/tag before applying
+the Application manifest. The Application itself is the GitOps bootstrap entry point; remove old inline
+`spec.source.helm.values` during this cutover so `valueFiles` are the only source. Let Argo reconcile resources;
+never use `ignoreDifferences` to conceal drift. Future changes use a new image tag/digest and a new Git revision.
+
+`Synced/Healthy` proves desired-state reconciliation and infrastructure readiness, not business correctness.
+After sync, verify Overview in the actual UI, synthetic upload → complete → daemon → snapshot, masking,
+privacy scan COMPLETE, and DQ score/coverage/gate. Replace an API pod and repeat Overview/upload, then refresh
+Argo and verify revision, image ID, scratch and environment remain unchanged without manual overrides.
+This sandbox check does not certify PostgreSQL/MinIO persistence, release pipelines, production rollout,
+or full TLS/egress enforcement.

@@ -87,6 +87,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.apiDsnSecret }}
                   key: {{ .Values.postgres.dsnKey }}
+            - name: DQ_IMPORT_TEMP_ROOT
+              value: {{ if .Values.security.protectedProcessing.enabled }}"/opt/dq/scratch"{{ else }}"/scratch/imports"{{ end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -109,20 +111,27 @@ spec:
             timeoutSeconds: 3
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
-          {{- if .Values.security.protectedProcessing.enabled }}
           volumeMounts:
+            {{- if .Values.security.protectedProcessing.enabled }}
             - name: scratch
               mountPath: /opt/dq/scratch
             - name: security
               mountPath: /opt/dq/security
               readOnly: true
-          {{- end }}
-      {{- if .Values.security.protectedProcessing.enabled }}
+            {{- else }}
+            - name: scratch
+              mountPath: /scratch
+            {{- end }}
       volumes:
+        {{- if .Values.security.protectedProcessing.enabled }}
         - name: scratch
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.security.protectedProcessing.apiScratchSizeLimit }}
         {{- include "dq-scoring.projectedSecurity" (dict "p" .Values.security.protectedProcessing "apiTls" true "spark" false) | nindent 8 }}
-      {{- end }}
+        {{- else }}
+        - name: scratch
+          emptyDir:
+            sizeLimit: {{ required "api.scratchSizeLimit is required for disk-backed API scratch" .Values.api.scratchSizeLimit }}
+        {{- end }}
 {{- end }}
