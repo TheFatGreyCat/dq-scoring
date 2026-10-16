@@ -1,0 +1,15 @@
+# Single-node staging registry; reuse the existing image volume, never replace it implicitly.
+services:
+  registry:
+    image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    container_name: dq-staging-registry
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - registry-data:/var/lib/registry
+
+volumes:
+  registry-data:
+    external: true
+    name: ${DQ_REGISTRY_VOLUME:?Set DQ_REGISTRY_VOLUME to the existing registry data volume}

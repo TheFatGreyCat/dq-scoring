@@ -126,9 +126,38 @@ the Application manifest. The Application itself is the GitOps bootstrap entry p
 `spec.source.helm.values` during this cutover so `valueFiles` are the only source. Let Argo reconcile resources;
 never use `ignoreDifferences` to conceal drift. Future changes use a new image tag/digest and a new Git revision.
 
+### Local registry availability
+
+The single-node `localhost:5000` registry is a runtime prerequisite, not an image cache.
+`Always` pull policy still needs registry manifest resolution when a pod restarts, even if layers are cached.
+Use `deploy/compose/registry.yml` (digest-pinned registry, loopback-only port, `unless-stopped`) and preserve
+the existing data volume. Set `DQ_REGISTRY_VOLUME` to the volume mounted at `/var/lib/registry`, obtainable
+with `docker inspect dq-staging-registry --format '{{json .Mounts}}'`; never silently create an empty replacement.
+For an existing standalone container, `docker update --restart unless-stopped dq-staging-registry` applies
+the same restart policy without replacing the container or volume. On a fresh host, create a dedicated volume
+and start Compose, then restore/push every pinned image before Argo reconciliation. Existing hosts must reuse
+their original volume. Export `DQ_REGISTRY_VOLUME`, then run `docker compose -f deploy/compose/registry.yml up -d`.
+The node must already be configured to reach the local HTTP registry; do not weaken TLS for other registries.
+Check `/v2/` and the exact `/v2/<repository>/manifests/sha256:<digest>` before rollout. `ImagePullBackOff`
+with connection refused requires restoring registry availability, not changing pull policy to hide the failure.
+
 `Synced/Healthy` proves desired-state reconciliation and infrastructure readiness, not business correctness.
 After sync, verify Overview in the actual UI, synthetic upload → complete → daemon → snapshot, masking,
 privacy scan COMPLETE, and DQ score/coverage/gate. Replace an API pod and repeat Overview/upload, then refresh
 Argo and verify revision, image ID, scratch and environment remain unchanged without manual overrides.
 This sandbox check does not certify PostgreSQL/MinIO persistence, release pipelines, production rollout,
 or full TLS/egress enforcement.
+
+### Overview/scratch recovery verification (2026-10-16)
+
+Staging reconciled `overview-scratch-20261016-r2` (`746f925`) to Synced/Healthy with API/import image
+`sha256:803d9c129d9a4b874ef077b717df7162f9f2483cad6c9ee79ae7a063334a01eb`.
+After API pod replacement, upload `7c9a48e5-3978-4345-a41e-91921ef9d008` reached VERIFIED and registered
+snapshot `3e2ce315-55b4-45ec-85c2-7da7876c16a3`; preview masked synthetic email, profile omitted raw email,
+and privacy scan was COMPLETE. Run `b38c6d2b-1659-4c4e-b33e-0bac2b2a079f` succeeded with score 50,
+coverage 100%, gate FAIL. Actual UI Overview returned HTTP 200 after replacement. Hard refresh retained
+the Git revision, digest, disk-backed 20Gi scratch, `/scratch/imports` and UID/GID/fsGroup 10001.
+Registry restart preserved the exact image manifest (HTTP 200); Compose configuration validated successfully.
+An earlier register request during rollout returned 502; retry after Ready succeeded. This is not a claim
+of zero-downtime single-replica replacement. Independent final review remains unavailable because the
+configured `final-reviewer` seat is absent from the agent runtime.
