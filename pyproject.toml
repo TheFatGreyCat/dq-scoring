@@ -1,0 +1,45 @@
+[project]
+name = "dq-scoring"
+version = "0.1.0"
+description = "Deterministic Data Quality Scoring System"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "argon2-cffi>=25.1.0",
+    "boto3>=1.35,<2",
+    "fastapi>=0.115,<1",
+    "google-re2==1.1.20251105",
+    "httpx>=0.27,<1",
+    "psycopg[binary]>=3.2,<4",
+    "pyarrow>=20,<24",
+    "pydantic>=2.12,<3",
+    "pydantic-settings>=2.15.0",
+    "pyjwt[crypto]>=2.10",
+    "spylls==0.1.7",
+    "uvicorn>=0.30,<1",
+]
+
+[dependency-groups]
+compute = [
+    "pyspark>=4.2.0",
+]
+dev = [
+    {include-group = "compute"},
+    "pytest>=8.4,<10",
+    "ruff>=0.12,<1",
+]
+
+[tool.uv]
+package = false
+
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+cache_dir = ".tmp/pytest_cache"
+addopts = "-p no:cacheprovider --basetemp=.tmp/pytest_temp"
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Security"]
+

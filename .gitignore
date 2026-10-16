@@ -1,0 +1,65 @@
+# ==============================================================================
+# DQ Scoring System - Git Ignore Configuration
+# ==============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments & package managers
+.venv/
+venv/
+env/
+.tmp/
+.tools/
+temp/
+.build/
+dist/
+build/
+*.egg-info/
+
+# Testing & Linting caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Environment variables & secrets (CRITICAL: NEVER COMMIT REAL SECRETS)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.crt
+*.p12
+credentials.json
+secrets.json
+service_account*.json
+
+# Databases & local storage scratchpad
+*.sqlite3
+*.db
+minio_data/
+data/tmp/
+data/scratch/
+
+# Office temporary files & OS artifacts
+~$*
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Agent instructions and commit guide stay available locally, outside Git.
+/.agents/
+/AGENTS.md
+/commit_guide.md
+
+# Documentation stays local; do not add it back to the Git index.
+/docs/
+
+# Frontend (bun/Vite)
+node_modules/
+*.tsbuildinfo
