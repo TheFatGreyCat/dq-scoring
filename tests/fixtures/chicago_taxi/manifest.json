@@ -1,0 +1,18 @@
+{
+  "dataset_name": "chicago_taxi_trips_2023_fixtures",
+  "random_seed": 42,
+  "files": [
+    {
+      "filename": "chicago_taxi_exploration_1k.csv",
+      "rows": 1000,
+      "sha256": "fa05af924a6465122a765adbdccaf6d7f5ab2ffc80a07344ed25640f6bbbcae7",
+      "size_bytes": 261874
+    },
+    {
+      "filename": "chicago_taxi_golden_5k.csv",
+      "rows": 5000,
+      "sha256": "15d8cd8cb5da17b104ef2b57b5c0b0511adf7f4d6858645272f0c2d078b246c3",
+      "size_bytes": 1306739
+    }
+  ]
+}

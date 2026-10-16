@@ -1,0 +1,301 @@
+{
+  "total_rows": 5000,
+  "rules": [
+    {
+      "rule_code": "CH_COMP_01",
+      "rule_name": "trip_id_not_null",
+      "rule_type": "NON_NULL",
+      "dimension": "Completeness",
+      "target_column": "trip_id",
+      "is_required": true,
+      "is_critical": true,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4950,
+        "failed": 0,
+        "missing": 50,
+        "miscast": 0,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 99.0
+    },
+    {
+      "rule_code": "CH_COMP_02",
+      "rule_name": "fare_not_null",
+      "rule_type": "NON_NULL",
+      "dimension": "Completeness",
+      "target_column": "fare",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4900,
+        "failed": 0,
+        "missing": 100,
+        "miscast": 0,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 98.0
+    },
+    {
+      "rule_code": "CH_VAL_01",
+      "rule_name": "trip_start_timestamp_parse",
+      "rule_type": "TYPE_PARSE",
+      "dimension": "Validity",
+      "target_column": "trip_start_timestamp",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4940,
+        "failed": 0,
+        "missing": 0,
+        "miscast": 60,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 98.8
+    },
+    {
+      "rule_code": "CH_VAL_02",
+      "rule_name": "fare_numeric_parse",
+      "rule_type": "TYPE_PARSE",
+      "dimension": "Validity",
+      "target_column": "fare",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4860,
+        "failed": 0,
+        "missing": 100,
+        "miscast": 40,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 97.2
+    },
+    {
+      "rule_code": "CH_VAL_03",
+      "rule_name": "fare_non_negative",
+      "rule_type": "DOMAIN_RANGE",
+      "dimension": "Validity",
+      "target_column": "fare",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4785,
+        "failed": 75,
+        "missing": 100,
+        "miscast": 40,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 95.7
+    },
+    {
+      "rule_code": "CH_VAL_04",
+      "rule_name": "payment_type_in_domain",
+      "rule_type": "DOMAIN_RANGE",
+      "dimension": "Validity",
+      "target_column": "payment_type",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4920,
+        "failed": 80,
+        "missing": 0,
+        "miscast": 0,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 98.4
+    },
+    {
+      "rule_code": "CH_UNIQ_01",
+      "rule_name": "trip_id_unique",
+      "rule_type": "UNIQUENESS",
+      "dimension": "Uniqueness",
+      "target_column": "trip_id",
+      "is_required": true,
+      "is_critical": true,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4920,
+        "failed": 30,
+        "missing": 50,
+        "miscast": 0,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 98.4
+    },
+    {
+      "rule_code": "CH_CONS_01",
+      "rule_name": "end_time_gte_start_time",
+      "rule_type": "CROSS_FIELD",
+      "dimension": "Consistency",
+      "target_column": "trip_end_timestamp",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4890,
+        "failed": 50,
+        "missing": 0,
+        "miscast": 60,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 97.8
+    },
+    {
+      "rule_code": "CH_CONS_02",
+      "rule_name": "trip_total_gte_fare",
+      "rule_type": "CROSS_FIELD",
+      "dimension": "Consistency",
+      "target_column": "trip_total",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4815,
+        "failed": 45,
+        "missing": 100,
+        "miscast": 40,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 96.3
+    },
+    {
+      "rule_code": "CH_TIME_01",
+      "rule_name": "trip_start_in_2023",
+      "rule_type": "DOMAIN_RANGE",
+      "dimension": "Timeliness",
+      "target_column": "trip_start_timestamp",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4905,
+        "failed": 35,
+        "missing": 0,
+        "miscast": 60,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 98.1
+    },
+    {
+      "rule_code": "CH_ACC_01",
+      "rule_name": "trip_miles_plausible",
+      "rule_type": "DOMAIN_RANGE",
+      "dimension": "Accuracy",
+      "target_column": "trip_miles",
+      "is_required": true,
+      "is_critical": false,
+      "is_advisory": false,
+      "contribution_weight": 1.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4975,
+        "failed": 25,
+        "missing": 0,
+        "miscast": 0,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 99.5
+    },
+    {
+      "rule_code": "CH_OUT_01",
+      "rule_name": "fare_iqr_outlier_advisory",
+      "rule_type": "DOMAIN_RANGE",
+      "dimension": "Accuracy",
+      "target_column": "fare",
+      "is_required": false,
+      "is_critical": false,
+      "is_advisory": true,
+      "contribution_weight": 0.0,
+      "null_policy": "fail",
+      "counts": {
+        "passed": 4845,
+        "failed": 15,
+        "missing": 100,
+        "miscast": 40,
+        "not_applicable": 0,
+        "total_observed": 5000
+      },
+      "rule_score": 96.9
+    }
+  ],
+  "dimensions": {
+    "Completeness": {
+      "score": 98.5,
+      "coverage": 1.0,
+      "weight": 1.0
+    },
+    "Validity": {
+      "score": 97.525,
+      "coverage": 1.0,
+      "weight": 1.0
+    },
+    "Uniqueness": {
+      "score": 98.4,
+      "coverage": 1.0,
+      "weight": 1.0
+    },
+    "Consistency": {
+      "score": 97.05,
+      "coverage": 1.0,
+      "weight": 1.0
+    },
+    "Timeliness": {
+      "score": 98.1,
+      "coverage": 1.0,
+      "weight": 1.0
+    },
+    "Accuracy": {
+      "score": 99.5,
+      "coverage": 1.0,
+      "weight": 1.0
+    }
+  },
+  "overall_dq_score": 98.179167,
+  "overall_coverage": 1.0,
+  "policy_standard": {
+    "critical_acceptance_threshold": 95.0,
+    "gate_status": "PASS",
+    "publication_status": "PUBLISHED"
+  },
+  "policy_zero_tolerance": {
+    "critical_acceptance_threshold": null,
+    "gate_status": "FAIL",
+    "publication_status": "WITHHELD"
+  }
+}
