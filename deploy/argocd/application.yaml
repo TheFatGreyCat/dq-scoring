@@ -9,10 +9,10 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
+  project: dq-staging
   source:
     repoURL: git@github.com:TheFatGreyCat/dq-scoring.git
-    targetRevision: overview-scratch-20261016
+    targetRevision: overview-scratch-20261016-r2
     path: deploy/charts/dq-scoring
     helm:
       releaseName: dq
