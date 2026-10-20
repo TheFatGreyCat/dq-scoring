@@ -23,7 +23,11 @@ describe("run status polling", () => {
   it("polls while active and stops at SUCCEEDED, linking the scorecard", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const responses = [status("QUEUED"), status("RUNNING"), status("SUCCEEDED", { assessment_id: ASSESSMENT_ID })];
-    fetchMock.mockImplementation(async () => json(200, responses.shift() ?? status("SUCCEEDED", { assessment_id: ASSESSMENT_ID })));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (new URL(url, "http://localhost").pathname.endsWith("/events")) return json(200, { items: [], next_cursor: null });
+      if (new URL(url, "http://localhost").pathname.endsWith("/execution")) return json(200, { attempts: [], request: {}, observed_scope: "RUN_ATTEMPT" });
+      return json(200, responses.shift() ?? status("SUCCEEDED", { assessment_id: ASSESSMENT_ID }));
+    });
 
     renderRoute(<RunStatusPage />, "/runs/:runId", `/runs/${RUN_ID}`);
     expect(await screen.findByText("Queued")).toBeInTheDocument();
@@ -40,7 +44,12 @@ describe("run status polling", () => {
   });
 
   it("shows FAILED with sanitized error and no assessment link", async () => {
-    fetchMock.mockResolvedValue(json(200, status("FAILED", { error_message: "Storage unavailable" })));
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/execution")) return json(200, { attempts: [], request: {}, observed_scope: "RUN_ATTEMPT" });
+      if (path.endsWith("/events")) return json(200, { items: [], next_cursor: null });
+      return json(200, status("FAILED", { error_message: "Storage unavailable" }));
+    });
     renderRoute(<RunStatusPage />, "/runs/:runId", `/runs/${RUN_ID}`);
     expect(await screen.findByText("Run failed")).toBeInTheDocument();
     expect(screen.getByText("Storage unavailable")).toBeInTheDocument();

@@ -15,6 +15,7 @@ from dq_scoring.common.rule_parameters import (
     TextQualityParameters,
 )
 from dq_scoring.core.models import StandardDimension
+from dq_scoring.presentation.api.governance import SelfApprovalReason
 
 # Canonical rule types accepted by quality_rules.rule_type; aliases understood by the
 # rule compiler are mapped onto them so the database never sees an alias.
@@ -133,6 +134,8 @@ class RulesetResponse(BaseModel):
     created_by: UUID
     created_at: datetime
     rules: list[QualityRuleResponse] = Field(default_factory=list)
+    can_self_approve: bool = False
+    """Caller-specific UI hint: true only when the server would accept an explicit self-approval now."""
 
 
 class SubmitRulesetRequest(BaseModel):
@@ -142,6 +145,11 @@ class SubmitRulesetRequest(BaseModel):
 
 
 class ApproveRulesetRequest(BaseModel):
-    """Payload to approve ruleset revision."""
+    """Payload to approve ruleset revision.
+
+    `self_approval_reason` is only honoured when the caller is a WORKSPACE_ADMIN approving a revision
+    they created/submitted; the server decides eligibility, never the client.
+    """
 
     approval_notes: str | None = None
+    self_approval_reason: SelfApprovalReason | None = None

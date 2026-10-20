@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from dq_scoring.adapters.compute.spark_settings import SparkSettings
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
+from dq_scoring.adapters.llm.gateway_settings import get_llm_settings
 from dq_scoring.adapters.storage.s3_settings import get_import_settings, get_s3_settings
 from dq_scoring.common.protected_transport import protected_connect
 from dq_scoring.presentation.api.auth import AuthenticatedUser
@@ -28,7 +29,11 @@ from dq_scoring.presentation.api.schemas.operations_schemas import (
     QueueSummary,
     SparkSummary,
 )
-from dq_scoring.services.operations_service import monitor_snapshot, storage_status
+from dq_scoring.services.operations_service import (
+    adapter_observations,
+    monitor_snapshot,
+    storage_status,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["Operations"])
 
@@ -44,6 +49,7 @@ def monitor(
     user=Depends(require_operations_admin),
     dsn=Depends(get_pg_dsn),
     storage=Depends(get_s3_settings),
+    llm=Depends(get_llm_settings),
 ):
     storage_health = storage_status(storage, user.tenant_id)
     try:
@@ -53,7 +59,7 @@ def monitor(
             validate_api_session(conn)
             conn.execute("SET LOCAL ROLE dq_app_role")
             set_tenant_context(conn, user.tenant_id)
-            return monitor_snapshot(conn, user.tenant_id, storage_health)
+            return monitor_snapshot(conn, user.tenant_id, storage_health, llm)
     except PrivilegedSessionError:
         raise HTTPException(
             403, "Privileged database sessions are not permitted"
@@ -62,6 +68,7 @@ def monitor(
         return MonitorResponse(
             checked_at=datetime.now(UTC),
             components=Components(database="down", storage=storage_health),
+            adapters=adapter_observations(datetime.now(UTC), "down", storage_health, [], llm),
             workers=[],
             spark=SparkSummary(),
             queue=QueueSummary(),
@@ -72,7 +79,7 @@ def monitor(
 def deployment_config(user=Depends(require_operations_admin), dsn=Depends(get_pg_dsn)):
     imports = get_import_settings()
     sizing = SparkSettings()
-    snapshot = monitor(user, dsn, get_s3_settings())
+    snapshot = monitor(user, dsn, get_s3_settings(), get_llm_settings())
     return {
         "configured_only": True,
         "imports": {

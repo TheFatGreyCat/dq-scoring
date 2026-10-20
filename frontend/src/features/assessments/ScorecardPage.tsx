@@ -13,6 +13,7 @@ import { formatRatio, formatScore, formatTimestamp } from "../../lib/format";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { recent } from "../../lib/recent";
 import type { SurfaceTranslationKey } from "../../lib/surfaceTranslations";
+import { AssessmentNarrativePanel } from "../advisory/AssessmentNarrativePanel";
 import { useSession } from "../auth/useSession";
 import { RuleTable } from "./RuleTable";
 import { DimensionTiles, ScoreHeader } from "./ScoreSummary";
@@ -301,6 +302,7 @@ export function ScorecardPage() {
       <ScoreHeader a={a} />
       <DimensionTiles dimensions={a.dimension_results} rules={a.rule_results} />
       <RuleTable rules={a.rule_results} />
+      <AssessmentNarrativePanel assessmentId={a.assessment_id} assessmentHash={a.assessment_hash} />
       <section className="card" aria-labelledby="provenance">
         <h2 id="provenance" className="mb-3">{t("scorecard.provenance")}</h2>
         <dl className="grid gap-4 sm:grid-cols-2">

@@ -227,3 +227,23 @@ def test_evaluation_worker_run_loop_bounded(sample_leased_run: LeasedRun):
     assert iterations == 2
     assert len(store.saved) == 1
 
+
+
+def test_worker_observes_run_for_its_lease_and_always_stops(sample_leased_run: LeasedRun):
+    """The observer is bound to the claimed lease for the execution window, even when execution fails."""
+    events = []
+
+    class Observer:
+        def start(self, lease):
+            events.append(("start", lease.run_id, lease.lease_generation))
+
+        def stop(self):
+            events.append(("stop",))
+
+    queue = MockQueuePort(runs=[sample_leased_run])
+    compute = InMemoryComputeAdapter()  # snapshot not registered -> execution fails
+    orchestrator = EvaluationOrchestrator(compute_engine=compute, assessment_store=MockAssessmentStore(), queue_port=queue)
+    worker = EvaluationWorker(queue_port=queue, orchestrator=orchestrator, heartbeat_interval=0.05, observer=Observer())
+    with pytest.raises(Exception):  # noqa: B017
+        worker.run_once()
+    assert events == [("start", sample_leased_run.run_id, sample_leased_run.lease_generation), ("stop",)]

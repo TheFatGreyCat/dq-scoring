@@ -68,7 +68,7 @@ export const surfaceTranslations = {
     "settings.infra.cap_minio_desc": "Tải lên đa phần (multipart streaming upload), phân lập staging prefix theo từng tenant.",
     "settings.security.rfc9457": "Chuẩn định dạng lỗi RFC 9457",
     "settings.security.rfc9457_desc": "Tất cả phản hồi lỗi API tuân theo chuẩn RFC 9457 Problem Details (application/problem+json).",
-    "settings.security.four_eyes_desc": "Người tạo Ruleset hoặc Policy không được tự phê duyệt (AC-003, FR-GOV-006). Cần vai trò DATA_STEWARD hoặc WORKSPACE_ADMIN khác ký duyệt.",
+    "settings.security.four_eyes_desc": "Phê duyệt độc lập là mặc định. Chỉ WORKSPACE_ADMIN được tự duyệt ruleset/policy với lý do bắt buộc và kiểm toán nguyên tử; mẫu vẫn cần người khác duyệt.",
     "settings.security.lockout_desc": "Bảo vệ chống vét cạn mật khẩu: Đăng nhập sai 5 lần sẽ khóa tài khoản trong 15 phút (Mã HTTP 423 Locked).",
 
     // Assessments & Scorecards List
@@ -180,7 +180,7 @@ export const surfaceTranslations = {
     "guide.viewer": "Xem dữ liệu, snapshot, trạng thái đánh giá và scorecard theo quyền workspace.",
     "guide.upload": "100% chỉ là số byte đã tải, không phải hoàn tất kiểm tra hoặc đánh giá.",
     "guide.recovery": "Làm mới chỉ đọc trạng thái. Tiếp tục tải chọn lại cùng file; nhập lại giữ phiên lỗi và cần file mới được chọn.",
-    "guide.approval": "Four-eyes: người khác phải phê duyệt cấu hình trước khi chạy.",
+    "guide.approval": "Phê duyệt độc lập; WORKSPACE_ADMIN có ngoại lệ tự duyệt ruleset/policy với lý do và kiểm toán.",
     "guide.queue": "QUEUED đang chờ evaluation daemon/slot; import daemon kiểm tra dữ liệu nhập riêng.",
     "settings.browser_only": "Tùy chọn chỉ lưu ở trình duyệt này, áp dụng ngay.",
     "settings.deployment": "Cấu hình triển khai (chỉ đọc)",
@@ -259,7 +259,7 @@ export const surfaceTranslations = {
     "settings.infra.cap_minio_desc": "Bounded multipart streaming upload with tenant-isolated staging prefixes.",
     "settings.security.rfc9457": "RFC 9457 Problem Details Standard",
     "settings.security.rfc9457_desc": "All API error responses conform to RFC 9457 Problem Details (application/problem+json).",
-    "settings.security.four_eyes_desc": "Ruleset or policy creators cannot approve their own configurations (AC-003, FR-GOV-006). Requires an independent DATA_STEWARD or WORKSPACE_ADMIN.",
+    "settings.security.four_eyes_desc": "Independent approval is the default. Only WORKSPACE_ADMIN may self-approve rulesets/policies with a required reason and atomic audit; templates still require another approver.",
     "settings.security.lockout_desc": "Brute-force protection: 5 consecutive failed sign-in attempts lock the account for 15 minutes (HTTP 423).",
 
     // Assessments & Scorecards List
@@ -371,7 +371,7 @@ export const surfaceTranslations = {
     "guide.viewer": "View datasets, snapshots, evaluation status, and scorecards within workspace permissions.",
     "guide.upload": "100% means uploaded bytes only, not completed verification or evaluation.",
     "guide.recovery": "Refresh only reads status. Resume requires reselecting the same file; import again keeps the failed session and requires file selection.",
-    "guide.approval": "Four-eyes: a different person must approve configuration before evaluation.",
+    "guide.approval": "Independent approval; WORKSPACE_ADMIN may self-approve rulesets/policies with a reason and audit record." ,
     "guide.queue": "QUEUED waits for the evaluation daemon/slot; the separate import daemon verifies imports.",
     "settings.browser_only": "Preferences apply immediately and are saved only in this browser.",
     "settings.deployment": "Deployment configuration (read only)",

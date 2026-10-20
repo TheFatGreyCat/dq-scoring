@@ -1,3 +1,5 @@
+import type { AdapterObservation } from "../features/operations/operationsApi";
+
 // Hand-mirrored from src/dq_scoring/presentation/api/schemas/*.py and core enums.
 // Replace with an OpenAPI-generated client once the API contract is stable.
 
@@ -85,6 +87,7 @@ export interface RulesetResponse {
   created_by: UUID;
   created_at: string;
   rules: QualityRuleResponse[];
+  can_self_approve?: boolean;
 }
 
 export interface CreatePolicyRequest {
@@ -103,6 +106,7 @@ export interface PolicyResponse extends CreatePolicyRequest {
   current_version: number;
   created_by: UUID;
   created_at: string;
+  can_self_approve?: boolean;
 }
 
 export interface TriggerRunRequest {
@@ -125,6 +129,8 @@ export interface RunResponse {
   completed_at?: string | null;
   error_message?: string | null;
   assessment_id?: UUID | null;
+  created_by?: UUID | null;
+  owned_by_me?: boolean;
 }
 
 export interface RunStatusResponse {
@@ -134,6 +140,24 @@ export interface RunStatusResponse {
   assessment_id: UUID | null;
   updated_at: string | null;
   created_at: string; started_at: string | null; completed_at: string | null; heartbeat_at: string | null; attempt_count: number;
+  created_by?: UUID | null;
+  owned_by_me?: boolean;
+}
+
+export type RunScope = "mine" | "workspace";
+
+export interface RunEvent {
+  event_id: UUID;
+  event_type: string;
+  attempt_count: number;
+  lease_generation: number | null;
+  created_at: string;
+  error_code: string | null;
+}
+
+export interface RunEventPage {
+  items: RunEvent[];
+  next_cursor: string | null;
 }
 
 export interface RuleResult {
@@ -275,11 +299,30 @@ export interface Recommendations {
   policy_templates: { template_id: string; reason_code: string }[]; warnings: string[];
 }
 
+export interface AiStatus { enabled: boolean; model: string | null; recommendations: boolean; narrative: boolean; }
+export type AiEngine = "LLM" | "HYBRID";
+export type AiPriority = "COMPLETENESS" | "VALIDITY" | "UNIQUENESS";
+export interface AiRecommendationRequest { engine: AiEngine; domain: "GENERAL"; priorities: AiPriority[]; }
+export type AiRuleSource = "LLM" | "HEURISTIC" | "HEURISTIC+LLM";
+export interface AiProvenance {
+  engine: AiEngine; source: "LLM" | "HYBRID" | "HEURISTIC_FALLBACK"; model: string | null; prompt_version: string;
+  context_sha256: string; generated_at: string; fallback: boolean; fallback_code: string | null;
+  candidates_rejected: number; columns_sent: number;
+}
+export type AiRecommendationItem = Recommendations["rules"][number] & { source: AiRuleSource };
+export interface AiRecommendations extends Omit<Recommendations, "rules"> { rules: AiRecommendationItem[]; provenance: AiProvenance; }
+export interface AssessmentNarrative {
+  report_id: UUID; assessment_id: UUID; assessment_hash: string; narrative: string;
+  cited_rules: { token: string; rule_id: string | null }[];
+  model: string; prompt_version: string; context_sha256: string; advisory: true; created_at: string;
+}
+
 export interface CurrentUser { user_id: UUID; tenant_id: UUID; email: string; role: string; }
 export type ComponentStatus = "up" | "down" | "degraded" | "unknown";
 export interface SparkSizing { driver_memory: string; executor_memory: string; executor_instances: number; executor_cores: number; max_memory_mb: number; sql_shuffle_partitions: number; }
 export interface OperationsMonitorResponse {
   checked_at: string;
+  adapters: AdapterObservation[];
   components: { api: ComponentStatus; database: ComponentStatus; storage: ComponentStatus; spark_master: ComponentStatus };
   workers: { worker_id: string; kind: "IMPORT" | "EVALUATION"; started_at: string; heartbeat_at: string; status: "initializing" | "ready" | "busy" | "degraded" | "stale"; last_error_code: string | null; metrics: { mode?: string | null; sizing?: SparkSizing | null; executors?: {id: string; active: boolean; cores: number; active_tasks: number; completed_tasks: number}[] | null } }[];
   spark: { mode: string | null; expected_executors: number | null; active_executors: number | null; active_jobs: number | null; active_stages: number | null; workers: {id: string; state: string; cores: number; allocated_cores: number; memory_mib: number; allocated_memory_mib: number}[] };

@@ -3,7 +3,6 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { session } from "../../api/client";
 import { getPreview, getSnapshot } from "../../api/endpoints";
-import { CopyId } from "../../components/CopyId";
 import { PageHeader } from "../../components/Field";
 import { ProblemAlert } from "../../components/ProblemAlert";
 import { useI18n } from "../../lib/i18n";
@@ -109,15 +108,7 @@ export function SnapshotDetailPage() {
         }
       />
 
-      <section className="card space-y-4">
-        <dl className="grid gap-3 sm:grid-cols-2 text-sm">
-          <CopyId label="Snapshot ID" value={snapshot.snapshot_id} />
-          <CopyId label="Asset ID" value={snapshot.asset_id} />
-        </dl>
-        <p className="text-sm text-fg-muted">
-          {t("preview.rows", { count: snapshot.total_rows })} ·{" "}
-          {t("preview.columns", { count: snapshot.total_columns })}
-        </p>
+      <section className="card">
         <div className="flex flex-wrap gap-3">
           <Link className="btn-secondary text-xs" to={`/rulesets?snapshot=${snapshotId}`}>
             {t("recommend.rules")}

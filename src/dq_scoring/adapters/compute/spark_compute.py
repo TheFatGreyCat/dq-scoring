@@ -38,6 +38,7 @@ from dq_scoring.core.models import MeasurementStatus, RuleCounts
 from dq_scoring.ports.compute_engine import IComputeEnginePort
 from dq_scoring.ports.object_store import IObjectStorePort, ObjectRef
 
+MAX_OBSERVED_JOBS = 20
 MIN_OUTLIER_SAMPLE = 4
 """Minimum parseable values needed for meaningful IQR quartiles."""
 
@@ -117,6 +118,34 @@ class PySparkComputeAdapter(IComputeEnginePort):
     def spark(self) -> SparkSession:
         """Return underlying SparkSession."""
         return self._spark
+
+    def bind_run_group(self, group_id: str) -> None:
+        """Tag Spark jobs submitted by the calling thread with this run/attempt group."""
+        self._spark.sparkContext.setJobGroup(group_id, "dq-run", interruptOnCancel=False)
+
+    def clear_run_group(self) -> None:
+        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
+
+    def observe_group(self, group_id: str) -> dict[str, Any]:
+        """Bounded status of jobs in one job group; never cluster-wide counts."""
+        context = self._spark.sparkContext
+        tracker = context.statusTracker()
+        jobs = []
+        for job_id in sorted(tracker.getJobIdsForGroup(group_id))[-MAX_OBSERVED_JOBS:]:
+            info = tracker.getJobInfo(job_id)
+            if info is None:
+                continue
+            stages = [s for s in map(tracker.getStageInfo, info.stageIds) if s is not None]
+            jobs.append({
+                "job_id": job_id,
+                "status": str(info.status).rsplit(".", 1)[-1],
+                "stages": len(info.stageIds),
+                "tasks": sum(s.numTasks for s in stages),
+                "active_tasks": sum(s.numActiveTasks for s in stages),
+                "completed_tasks": sum(s.numCompletedTasks for s in stages),
+                "failed_tasks": sum(s.numFailedTasks for s in stages),
+            })
+        return {"application_id": context.applicationId, "jobs": jobs}
 
     def _object_ref(self, snapshot: DatasetSnapshot, descriptor: dict[str, Any]) -> ObjectRef:
         try:

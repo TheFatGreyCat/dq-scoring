@@ -22,6 +22,7 @@ from dq_scoring.common.protected_transport import (
 from dq_scoring.services.evaluation_orchestrator import EvaluationOrchestrator
 from dq_scoring.workers.evaluation_worker import EvaluationWorker
 from dq_scoring.workers.monitoring import (
+    RunSparkObserver,
     WorkerMonitor,
     infrastructure_error_code,
     spark_metrics,
@@ -80,6 +81,7 @@ def run_daemon() -> None:
             heartbeat_interval=heartbeat_interval,
             on_busy_changed=monitor.set_busy,
             on_queue_available=monitor.queue_available,
+            observer=RunSparkObserver(compute, queue),
         )
 
         def _signal_handler(signum: int, _frame: object) -> None:

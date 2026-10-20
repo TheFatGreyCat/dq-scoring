@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,3 +46,13 @@ class SnapshotResponse(BaseModel):
     captured_at: datetime
     version_number: int | None = None
     version_status: str | None = None
+
+
+class AiRecommendationRequest(BaseModel):
+    """Explicit, cost-bearing request for external-LLM rule suggestions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    engine: Literal["LLM", "HYBRID"]
+    domain: Literal["FINANCE", "RETAIL", "HEALTHCARE", "TRANSPORTATION", "GENERAL"] = "GENERAL"
+    priorities: list[Literal["COMPLETENESS", "VALIDITY", "UNIQUENESS"]] = Field(min_length=1, max_length=3)

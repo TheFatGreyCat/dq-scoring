@@ -9,11 +9,13 @@ from uuid import UUID, uuid4
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from dq_scoring.adapters.llm.gateway_settings import LlmSettings, get_llm_settings
 from dq_scoring.presentation.api.auth import AuthenticatedUser
 from dq_scoring.presentation.api.dependencies import (
     check_tenant_access,
     get_current_user,
     get_db_connection,
+    get_pg_dsn,
 )
 from dq_scoring.presentation.api.pagination import (
     Page,
@@ -23,10 +25,12 @@ from dq_scoring.presentation.api.pagination import (
     pagination,
 )
 from dq_scoring.presentation.api.schemas.asset_schemas import (
+    AiRecommendationRequest,
     AssetResponse,
     CreateAssetRequest,
     SnapshotResponse,
 )
+from dq_scoring.services.ai_recommendation_service import recommend_with_ai
 from dq_scoring.services.privacy_policy import (
     mask_preview_and_profile,
     resolve_snapshot_protection,
@@ -168,13 +172,8 @@ def snapshot_preview(snapshot_id: UUID, user: AuthenticatedUser = Depends(get_cu
     return _preview(conn, user, snapshot_id)
 
 
-@router.get("/snapshots/{snapshot_id}/recommendations")
-def snapshot_recommendations(snapshot_id: UUID, domain: Literal["FINANCE", "RETAIL", "HEALTHCARE", "TRANSPORTATION", "GENERAL"] = "GENERAL", priorities: str = "COMPLETENESS,VALIDITY,UNIQUENESS", user: AuthenticatedUser = Depends(get_current_user), conn: psycopg.Connection = Depends(get_db_connection)):
-    from dq_scoring.core.models import StandardDimension
+def _heuristic(conn, user, snapshot_id, domain, selected):
     from dq_scoring.services.rule_recommendations import recommend_rules
-    selected = tuple(value.strip() for value in priorities.split(",") if value.strip())
-    if set(selected) - {d.value for d in StandardDimension}:
-        raise HTTPException(422, detail="INVALID_PRIORITIES")
     data = _preview(conn, user, snapshot_id)
     templates = []
     with conn.cursor() as cur:
@@ -182,4 +181,33 @@ def snapshot_recommendations(snapshot_id: UUID, domain: Literal["FINANCE", "RETA
         templates.extend({"template_id": str(r[0]), "template_code": r[1], "domain": r[2], "rules_payload": r[3]} for r in cur.fetchall())
         cur.execute("SELECT template_id,template_code,domain FROM scoring_policy_templates WHERE tenant_id IS NULL OR tenant_id=%s ORDER BY template_code", (user.tenant_id,))
         templates.extend({"template_id": str(r[0]), "template_code": r[1], "domain": r[2]} for r in cur.fetchall())
-    return recommend_rules(data["schema_definition"], data["profile"], domain, selected, templates)
+    return data, recommend_rules(data["schema_definition"], data["profile"], domain, selected, templates)
+
+
+@router.get("/snapshots/{snapshot_id}/recommendations")
+def snapshot_recommendations(snapshot_id: UUID, domain: Literal["FINANCE", "RETAIL", "HEALTHCARE", "TRANSPORTATION", "GENERAL"] = "GENERAL", priorities: str = "COMPLETENESS,VALIDITY,UNIQUENESS", user: AuthenticatedUser = Depends(get_current_user), conn: psycopg.Connection = Depends(get_db_connection)):
+    from dq_scoring.core.models import StandardDimension
+    selected = tuple(value.strip() for value in priorities.split(",") if value.strip())
+    if set(selected) - {d.value for d in StandardDimension}:
+        raise HTTPException(422, detail="INVALID_PRIORITIES")
+    return _heuristic(conn, user, snapshot_id, domain, selected)[1]
+
+
+@router.get("/ai/status")
+def ai_status(user: AuthenticatedUser = Depends(get_current_user), settings: LlmSettings = Depends(get_llm_settings)) -> dict:
+    on = settings.enabled and settings.configured
+    return {"enabled": on, "model": settings.model if on else None, "recommendations": on, "narrative": on}
+
+
+@router.post("/snapshots/{snapshot_id}/recommendations/ai")
+async def snapshot_ai_recommendations(
+    snapshot_id: UUID, body: AiRecommendationRequest,
+    user: AuthenticatedUser = Depends(get_current_user), dsn: str = Depends(get_pg_dsn),
+    settings: LlmSettings = Depends(get_llm_settings),
+) -> dict:
+    """Explicit inference; holds no DB connection across the gateway call (see recommend_with_ai)."""
+    priorities = tuple(dict.fromkeys(body.priorities))
+    return await recommend_with_ai(
+        dsn, user, snapshot_id, body.engine, priorities, settings,
+        lambda conn: _heuristic(conn, user, snapshot_id, body.domain, priorities),
+    )

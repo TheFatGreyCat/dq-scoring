@@ -21,6 +21,7 @@ import { GovernanceBadge } from "../../components/StatusBadge";
 import { useI18n } from "../../lib/i18n";
 import type { GovernanceKey } from "../../lib/governanceTranslations";
 import { recent, useRecent } from "../../lib/recent";
+import { AiRecommendationsPanel } from "../advisory/AiRecommendationsPanel";
 import { ApprovalPanel } from "./ApprovalPanel";
 import { RuleRow } from "./RuleRow";
 import {
@@ -83,6 +84,7 @@ export function RulesetsPage() {
         id: r.ruleset_id,
         label: r.name,
         status: r.status,
+        canSelfApprove: r.can_self_approve,
       })) ?? [],
     [rulesetsQuery.data],
   );
@@ -691,6 +693,14 @@ function RulesetEditor({
             </button>
           </div>
         </div>
+      )}
+
+      {snapshotId && (
+        <AiRecommendationsPanel
+          key={snapshotId}
+          snapshotId={snapshotId}
+          onMerge={(incoming) => setRules((prev) => mergeAndDedupeRules(prev, incoming))}
+        />
       )}
 
       {/* Rules list */}

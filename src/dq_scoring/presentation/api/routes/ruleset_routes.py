@@ -177,11 +177,11 @@ def create_ruleset(
             rules=saved_rules,
         )
 
-def _ruleset_response(cur: psycopg.Cursor, ruleset_id: UUID) -> RulesetResponse:
-    """Build the response from what is stored, never from request echoes."""
+def _ruleset_response(cur: psycopg.Cursor, ruleset_id: UUID, user: AuthenticatedUser) -> RulesetResponse:
+    """Build the response from what is stored, never from request echoes; capabilities are for `user`."""
     cur.execute(
         """
-        SELECT ruleset_id, tenant_id, asset_id, COALESCE(name, version), status, created_by, created_at
+        SELECT ruleset_id, tenant_id, asset_id, COALESCE(name, version), status, created_by, created_at, submitted_by
         FROM rulesets WHERE ruleset_id = %s;
         """,
         (ruleset_id,),
@@ -206,6 +206,9 @@ def _ruleset_response(cur: psycopg.Cursor, ruleset_id: UUID) -> RulesetResponse:
     return RulesetResponse(
         ruleset_id=rs[0], tenant_id=rs[1], asset_id=rs[2], name=rs[3], status=rs[4],
         current_version=1, created_by=rs[5], created_at=rs[6], rules=rules,
+        can_self_approve=governance.can_self_approve(
+            governance.RULESETS, {"status": rs[4], "created_by": rs[5], "submitted_by": rs[7]}, user, cur
+        ),
     )
 
 
@@ -221,7 +224,7 @@ def list_rulesets(asset_id: UUID | None = None, status: Literal["DRAFT", "PENDIN
             params.append(value)
     result = fetch_page(conn, projection="ruleset_id", source="rulesets", predicates=predicates, params=params, order="created_at DESC,ruleset_id DESC", paging=paging)
     with conn.cursor() as cur:
-        result["items"] = [_ruleset_response(cur, row["ruleset_id"]) for row in result["items"]]
+        result["items"] = [_ruleset_response(cur, row["ruleset_id"], user) for row in result["items"]]
     return result
 
 
@@ -231,7 +234,7 @@ def get_ruleset(ruleset_id: UUID, user: AuthenticatedUser = Depends(get_current_
         cur.execute("SELECT ruleset_id FROM rulesets WHERE tenant_id=%s AND ruleset_id=%s", (user.tenant_id, ruleset_id))
         if not cur.fetchone():
             raise HTTPException(404, detail="RESOURCE_NOT_FOUND")
-        return _ruleset_response(cur, ruleset_id)
+        return _ruleset_response(cur, ruleset_id, user)
 
 
 @router.post("/{ruleset_id}/submit", response_model=RulesetResponse)
@@ -244,7 +247,7 @@ def submit_ruleset(
     """Submit a DRAFT ruleset revision for independent approval (DRAFT -> PENDING_APPROVAL)."""
     with conn.cursor() as cur:
         governance.submit_for_approval(cur, governance.RULESETS, ruleset_id, current_user)
-        return _ruleset_response(cur, ruleset_id)
+        return _ruleset_response(cur, ruleset_id, current_user)
 
 
 @router.post("/{ruleset_id}/approve", response_model=RulesetResponse)
@@ -256,5 +259,5 @@ def approve_ruleset(
 ) -> RulesetResponse:
     """AC-003 & FR-GOV-006: Approve a PENDING_APPROVAL ruleset (creator/submitter != approver)."""
     with conn.cursor() as cur:
-        governance.approve(cur, governance.RULESETS, ruleset_id, current_user)
-        return _ruleset_response(cur, ruleset_id)
+        governance.approve(cur, governance.RULESETS, ruleset_id, current_user, req.self_approval_reason)
+        return _ruleset_response(cur, ruleset_id, current_user)

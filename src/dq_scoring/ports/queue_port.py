@@ -46,3 +46,13 @@ class IQueuePort(Protocol):
     ) -> RunStatus | None:
         """Retrieve current lifecycle status for an evaluation run."""
         ...
+
+    def record_spark_observation(
+        self,
+        run_id: UUID,
+        lease_generation: int,
+        tenant_id: UUID,
+        observation: dict,
+    ) -> bool:
+        """Append a run-scoped Spark observation if the lease generation is still current."""
+        ...

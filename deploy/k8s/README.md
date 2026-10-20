@@ -161,3 +161,23 @@ Registry restart preserved the exact image manifest (HTTP 200); Compose configur
 An earlier register request during rollout returned 502; retry after Ready succeeded. This is not a claim
 of zero-downtime single-replica replacement. Independent final review remains unavailable because the
 configured `final-reviewer` seat is absent from the agent runtime.
+
+### Optional AI advisory deployment
+
+`llm.enabled` defaults to `false` and sets `DQ_LLM_ENABLED` only on the API container. Existing import,
+privacy and evaluation workers do not receive gateway credentials. To enable, an operator must supply
+an approved HTTPS chat-completions URL (`llm.endpoint`), pinned provider model (`llm.model`) and an
+existing Secret reference (`llm.existingSecret`, `llm.apiKeyKey`). Never put the API key in values/Git.
+The chart fails if any enabled setting is missing. Application-level limits default to a 20-second
+timeout, 50 columns, 1,024 output tokens and two concurrent calls per API process.
+
+Protected processing currently rejects `llm.enabled=true`: no gateway egress policy has been approved.
+Do not work around this by broadening Cilium egress or disabling network policy. Default/staging remain
+OFF until explicit provider approval and independent security review. Disabling advisory does not alter
+existing privacy scans or assessment results; it is not a downgrade path for local REQUIRED privacy scans.
+
+Apply the narrative migration before serving the new API image, then pin API/UI images and the Argo Git
+revision using the procedure above. A successful Helm render proves configuration shape only, not provider
+quality, egress certification or runtime/model feasibility. Local inference requires a separately pinned
+runtime image/model artifact, license and measured synthetic benchmark; none is implicitly provisioned by
+this chart. Keep API advisory OFF when the model/gateway prerequisite is unavailable.

@@ -9,11 +9,13 @@ from uuid import UUID
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from dq_scoring.adapters.llm.gateway_settings import LlmSettings, get_llm_settings
 from dq_scoring.presentation.api.auth import AuthenticatedUser
 from dq_scoring.presentation.api.dependencies import (
     check_tenant_access,
     get_current_user,
     get_db_connection,
+    get_pg_dsn,
 )
 from dq_scoring.presentation.api.pagination import (
     Pagination,
@@ -27,6 +29,10 @@ from dq_scoring.presentation.api.schemas.assessment_schemas import (
     DimensionResultResponse,
     PublicAssessmentResponse,
     PublicDimensionScore,
+)
+from dq_scoring.services.assessment_report_service import (
+    generate_narrative,
+    latest_narrative,
 )
 
 router = APIRouter(prefix="/api/v1/assessments", tags=["Scorecards & Assessments"])
@@ -53,6 +59,24 @@ def list_assessments(
         predicates.append("a.published_at < %s")
         params.append(created_to)
     return fetch_page(conn, projection="a.assessment_id,a.run_id,a.snapshot_id,a.dq_score,a.quality_gate,a.publication_status,a.coverage_ratio,a.published_at", source="assessments a JOIN dataset_snapshots s ON s.tenant_id=a.tenant_id AND s.snapshot_id=a.snapshot_id", predicates=predicates, params=params, order="a.published_at DESC,a.assessment_id DESC", paging=paging)
+
+
+@router.get("/{assessment_id}/narrative")
+def get_assessment_narrative(
+    assessment_id: UUID, user: AuthenticatedUser = Depends(get_current_user),
+    conn: psycopg.Connection = Depends(get_db_connection),
+) -> dict:
+    """Read the latest stored advisory report; never triggers inference."""
+    return latest_narrative(conn, user, assessment_id)
+
+
+@router.post("/{assessment_id}/narrative", status_code=status.HTTP_201_CREATED)
+async def create_assessment_narrative(
+    assessment_id: UUID, user: AuthenticatedUser = Depends(get_current_user),
+    dsn: str = Depends(get_pg_dsn), settings: LlmSettings = Depends(get_llm_settings),
+) -> dict:
+    """Explicit generation; holds no DB connection across the gateway call."""
+    return await generate_narrative(dsn, user, assessment_id, settings)
 
 
 @router.get("/{assessment_id}", response_model=AssessmentDetailResponse)

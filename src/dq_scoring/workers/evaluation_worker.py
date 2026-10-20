@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 from uuid import UUID
 
 from dq_scoring.core.entities import ImmutableAssessment, LeasedRun
@@ -86,8 +87,10 @@ class EvaluationWorker:
         heartbeat_interval: float = 5.0,
         on_busy_changed: Callable[[bool], None] | None = None,
         on_queue_available: Callable[[], None] | None = None,
+        observer: Any | None = None,
     ) -> None:
         self._queue = queue_port
+        self._observer = observer
         self._orchestrator = orchestrator
         self.worker_id = worker_id
         self._poll_interval = poll_interval
@@ -145,9 +148,13 @@ class EvaluationWorker:
         try:
             if self._on_busy_changed:
                 self._on_busy_changed(True)
+            if self._observer:
+                self._observer.start(leased_run)
             assessment = self._orchestrator.execute_leased_run(leased_run)
             return assessment
         finally:
+            if self._observer:
+                self._observer.stop()
             heartbeat.stop()
             if self._on_busy_changed:
                 self._on_busy_changed(False)

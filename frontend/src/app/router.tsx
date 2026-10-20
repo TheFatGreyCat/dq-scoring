@@ -43,6 +43,7 @@ export const routes = [
           { path: "policies", element: <PoliciesPage /> },
           { path: "templates", element: <TemplateCatalogPage /> },
           { path: "runs", element: <RunsPage /> },
+          { path: "my-jobs", element: <RunsPage mine /> },
           { path: "runs/new", element: <RunWizardPage /> },
           { path: "runs/:runId", element: <RunStatusPage /> },
           { path: "assessments", element: <AssessmentsPage /> },

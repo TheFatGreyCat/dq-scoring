@@ -42,6 +42,15 @@ minio:
     snapshots: dq-snapshots-local
     artifacts: dq-artifacts-local
 
+# Optional external advisory. Never used by imports, privacy scans or scoring.
+# Endpoint/model must be operator-approved before enabling. API key is an existing Secret only.
+llm:
+  enabled: false
+  endpoint: ""
+  model: ""
+  existingSecret: ""
+  apiKeyKey: api_key
+
 security:
   jwtAlgorithm: HS256
   existingSecret: dq-auth-secret

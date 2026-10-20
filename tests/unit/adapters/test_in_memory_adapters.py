@@ -156,3 +156,13 @@ def test_in_memory_queue_adapter():
         queue.complete_run(rid1, lease_generation=1, status=RunStatus.SUCCEEDED) is True
     )
     assert queue.get_run_status(rid1) == RunStatus.SUCCEEDED
+
+
+def test_expired_in_memory_lease_cannot_publish_observation():
+    queue = InMemoryQueueAdapter()
+    spec = RunSpec(run_id=uuid4(), tenant_id=uuid4(), snapshot=_sample_snapshot(), rules=[], policy=ScoringPolicy())
+    queue.enqueue_run(spec, idempotency_key="expired-observation")
+    lease = queue.claim_next_run(worker_id="synthetic", timeout_seconds=-1)
+    assert lease is not None
+    assert queue.heartbeat(lease.run_id, lease.lease_generation) is False
+    assert queue.record_spark_observation(lease.run_id, lease.lease_generation, spec.tenant_id, {"jobs": []}) is False

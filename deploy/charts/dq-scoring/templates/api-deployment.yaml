@@ -89,6 +89,22 @@ spec:
                   key: {{ .Values.postgres.dsnKey }}
             - name: DQ_IMPORT_TEMP_ROOT
               value: {{ if .Values.security.protectedProcessing.enabled }}"/opt/dq/scratch"{{ else }}"/scratch/imports"{{ end }}
+            - name: DQ_LLM_ENABLED
+              value: {{ .Values.llm.enabled | quote }}
+            {{- if .Values.llm.enabled }}
+            {{- if .Values.security.protectedProcessing.enabled }}
+            {{- fail "LLM advisory is not enabled for protected processing: approved egress policy is required" }}
+            {{- end }}
+            - name: DQ_LLM_ENDPOINT
+              value: {{ required "llm.endpoint is required when advisory is enabled" .Values.llm.endpoint | quote }}
+            - name: DQ_LLM_MODEL
+              value: {{ required "llm.model is required when advisory is enabled" .Values.llm.model | quote }}
+            - name: DQ_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "llm.existingSecret is required when advisory is enabled" .Values.llm.existingSecret }}
+                  key: {{ required "llm.apiKeyKey is required when advisory is enabled" .Values.llm.apiKeyKey }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health

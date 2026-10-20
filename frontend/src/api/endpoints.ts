@@ -11,6 +11,7 @@ import type {
   RulesetResponse,
   RunResponse,
   RunStatusResponse,
+  RunScope, RunEventPage,
   SnapshotResponse,
   TokenResponse,
   TriggerRunRequest,
@@ -19,6 +20,7 @@ import type {
   RulesetTemplate,
   ScoringPolicyTemplate,
   Page, ImportSession, StorageObject, DatasetPreview, Recommendations,
+  AiStatus, AiRecommendationRequest, AiRecommendations, AssessmentNarrative,
   TemplateOverview, FindingCategory, FindingResponse, SensitiveFindingsResponse, ProtectionPolicyResponse,
   ColumnClassificationsResponse, UpdateClassificationsRequest,
   PrivacyRule, PrivacyRuleCreateRequest, PrivacyRuleUpdateRequest, PrivacyRuleWriteResponse,
@@ -60,13 +62,13 @@ export type GovernanceKind = "rulesets" | "policies";
 export const submitForApproval = <T>(kind: GovernanceKind, entityId: UUID, notes: string) =>
   api<T>("POST", `/${kind}/${id(entityId)}/submit`, { body: { notes: notes || null } });
 
-export const approve = <T>(kind: GovernanceKind, entityId: UUID, notes: string) =>
-  api<T>("POST", `/${kind}/${id(entityId)}/approve`, { body: { approval_notes: notes || null } });
+export const approve = <T>(kind: GovernanceKind, entityId: UUID, notes: string, selfApprovalReason?: string) =>
+  api<T>("POST", `/${kind}/${id(entityId)}/approve`, { body: { approval_notes: notes || null, ...(selfApprovalReason ? { self_approval_reason: selfApprovalReason } : {}) } });
 
 export const triggerRun = (body: TriggerRunRequest) => api<RunResponse>("POST", "/runs", { body });
 
-export const getRunStatus = (runId: UUID, signal?: AbortSignal) =>
-  api<RunStatusResponse>("GET", `/runs/${id(runId)}/status`, { signal });
+export const getRunStatus = (runId: UUID, signal?: AbortSignal, scope?: RunScope) =>
+  api<RunStatusResponse>("GET", `/runs/${id(runId)}/status${scope ? `?scope=${scope}` : ""}`, { signal });
 
 export const getAssessment = (assessmentId: UUID, signal?: AbortSignal) =>
   api<AssessmentDetail>("GET", `/assessments/${id(assessmentId)}`, { signal });
@@ -85,6 +87,8 @@ export const listSnapshots = (filters: Filters = {}, signal?: AbortSignal) => ap
 export const listRulesets = (filters: Filters = {}, signal?: AbortSignal) => api<Page<RulesetResponse>>("GET", `/rulesets${query(filters)}`, { signal });
 export const listPolicies = (filters: Filters = {}, signal?: AbortSignal) => api<Page<PolicyResponse>>("GET", `/policies${query(filters)}`, { signal });
 export const listRuns = (filters: Filters = {}, signal?: AbortSignal) => api<Page<RunResponse>>("GET", `/runs${query(filters)}`, { signal });
+export const listRunEvents = (runId: UUID, filters: Filters = {}, signal?: AbortSignal) =>
+  api<RunEventPage>("GET", `/runs/${id(runId)}/events${query(filters)}`, { signal });
 export const listAssessments = (filters: Filters = {}, signal?: AbortSignal) => api<Page<Omit<AssessmentDetail, "dimension_results" | "rule_results"> & {published_at: string}>>("GET", `/assessments${query(filters)}`, { signal });
 export const getRuleset = (value: UUID) => api<RulesetResponse>("GET", `/rulesets/${id(value)}`);
 export const getPolicy = (value: UUID) => api<PolicyResponse>("GET", `/policies/${id(value)}`);
@@ -103,6 +107,13 @@ export const abortImport = (value: UUID) => api<ImportSession>("POST", `/imports
 export const storageObjects = (filters: Filters = {}, signal?: AbortSignal) => api<{items: StorageObject[]; next_token: string | null}>("GET", `/storage/objects${query(filters)}`, { signal });
 export const getPreview = (value: UUID) => api<DatasetPreview>("GET", `/snapshots/${id(value)}/preview`);
 export const getRecommendations = (value: UUID, filters: Filters = {}) => api<Recommendations>("GET", `/snapshots/${id(value)}/recommendations${query(filters)}`);
+export const getAiStatus = (signal?: AbortSignal) => api<AiStatus>("GET", "/ai/status", { signal });
+export const createAiRecommendations = (value: UUID, body: AiRecommendationRequest, signal?: AbortSignal) =>
+  api<AiRecommendations>("POST", `/snapshots/${id(value)}/recommendations/ai`, { body, signal, timeoutMs: 130_000 });
+export const getAssessmentNarrative = (value: UUID, signal?: AbortSignal) =>
+  api<AssessmentNarrative>("GET", `/assessments/${id(value)}/narrative`, { signal });
+export const createAssessmentNarrative = (value: UUID) =>
+  api<AssessmentNarrative>("POST", `/assessments/${id(value)}/narrative`, { timeoutMs: 130_000 });
 
 export const getTemplateOverview = (signal?: AbortSignal) =>
   api<TemplateOverview>("GET", "/templates/overview", { signal });

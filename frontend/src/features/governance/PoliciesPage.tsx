@@ -60,6 +60,7 @@ export function PoliciesPage() {
         id: p.policy_id,
         label: p.name,
         status: p.status,
+        canSelfApprove: p.can_self_approve,
       })) ?? [],
     [policiesQuery.data],
   );

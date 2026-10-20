@@ -135,3 +135,21 @@ class InMemoryQueueAdapter(IQueuePort):
             if spec and spec.tenant_id != tenant_id:
                 return None
         return self._statuses.get(run_id)
+
+    def record_spark_observation(
+        self,
+        run_id: UUID,
+        lease_generation: int,
+        tenant_id: UUID,
+        observation: dict,
+    ) -> bool:
+        """Accept only the current lease generation of an active run; nothing is retained."""
+        spec = self._runs.get(run_id)
+        return bool(
+            spec
+            and spec.tenant_id == tenant_id
+            and run_id in self._active_leases
+            and self._active_leases[run_id].lease_expires_at > datetime.now(UTC)
+            and self._statuses.get(run_id) in (RunStatus.LEASED, RunStatus.RUNNING)
+            and self._lease_generations.get(run_id) == lease_generation
+        )

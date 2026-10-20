@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
-import { BadgeCheck, Check, Send } from "lucide-react";
-import { useEffect, useState } from "react";
+import { BadgeCheck, Check, Send, ShieldAlert } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { GovernanceStatus } from "../../api/types";
 import { approve, submitForApproval, type GovernanceKind } from "../../api/endpoints";
 import { ConfirmButton } from "../../components/ConfirmButton";
@@ -47,11 +47,15 @@ interface Revision {
   status: GovernanceStatus;
   name: string;
   current_version: number;
+  can_self_approve?: boolean;
 }
 
+const MAX_SELF_APPROVAL_REASON = 500;
+
 /**
- * Submit / approve by ID. Approval must come from a different authorized user;
- * the server enforces this (403), the UI only explains it.
+ * Submit / approve by ID. Approval normally needs a different authorized user (server returns 403 otherwise).
+ * A WORKSPACE_ADMIN who created/submitted a ruleset or policy may instead self-approve through a separate
+ * dialog with a mandatory reason; the server decides eligibility (`can_self_approve`), the UI only mirrors it.
  */
 export function ApprovalPanel<T extends Revision>({
   kind,
@@ -67,7 +71,7 @@ export function ApprovalPanel<T extends Revision>({
   idOf: (entity: T) => string;
   noun: string;
   selectedEntity?: T | null;
-  serverItems?: Array<{ id: string; label: string; status: GovernanceStatus }>;
+  serverItems?: Array<{ id: string; label: string; status: GovernanceStatus; canSelfApprove?: boolean }>;
   onActionSuccess?: (entity: T) => void;
 }) {
   const { t } = useI18n();
@@ -75,39 +79,56 @@ export function ApprovalPanel<T extends Revision>({
   const [entityId, setEntityId] = useState(known[0]?.id ?? "");
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState<T | null>(null);
-  const [lastAction, setLastAction] = useState<"submitted" | "approved" | null>(null);
+  const [lastAction, setLastAction] = useState<"submitted" | "approved" | "self-approved" | null>(null);
+  const [reason, setReason] = useState("");
+  const selfDialog = useRef<HTMLDialogElement>(null);
+
+  // Parents pass inline `idOf`; read it through a ref so only a new selection resets local state.
+  const idOfRef = useRef(idOf);
+  idOfRef.current = idOf;
+  useEffect(() => {
+    if (!selectedEntity) return;
+    setEntityId(idOfRef.current(selectedEntity));
+    setResult(selectedEntity);
+    setLastAction(null);
+  }, [selectedEntity]);
 
   useEffect(() => {
-    if (selectedEntity) {
-      setEntityId(idOf(selectedEntity));
-      setResult(selectedEntity);
-      setLastAction(null);
-    } else if (!entityId) {
-      if (serverItems.length > 0) setEntityId(serverItems[0].id);
-      else if (known.length > 0) setEntityId(known[0].id);
-    }
-  }, [selectedEntity, idOf, serverItems, known, entityId]);
+    if (selectedEntity || entityId) return;
+    if (serverItems.length > 0) setEntityId(serverItems[0].id);
+    else if (known.length > 0) setEntityId(known[0].id);
+  }, [selectedEntity, serverItems, known, entityId]);
+  const selectedIdRef = useRef(entityId.trim());
+  selectedIdRef.current = entityId.trim();
 
-  const onSuccess = (action: "submitted" | "approved") => (entity: T) => {
-    setResult(entity);
-    setLastAction(action);
-    setNotes("");
+  const onSuccess = (action: "submitted" | "approved" | "self-approved") => (entity: T) => {
+    if (idOfRef.current(entity) === selectedIdRef.current) {
+      setResult(entity);
+      setLastAction(action);
+      setNotes("");
+      onActionSuccess?.(entity);
+    }
     const label =
       serverItems.find((s) => s.id === idOf(entity))?.label ??
       known.find((k) => k.id === idOf(entity))?.label ??
       entity.name;
     recent.remember({ kind: recentKind, id: idOf(entity), label, status: entity.status });
-    onActionSuccess?.(entity);
   };
   const submit = useMutation({ mutationFn: () => submitForApproval<T>(kind, entityId.trim(), notes), onSuccess: onSuccess("submitted") });
   const approval = useMutation({ mutationFn: () => approve<T>(kind, entityId.trim(), notes), onSuccess: onSuccess("approved") });
-  const error = submit.error ?? approval.error;
-  const pending = submit.isPending || approval.isPending;
+  const selfApproval = useMutation({
+    mutationFn: (selfReason: string) => approve<T>(kind, entityId.trim(), notes, selfReason),
+    onSuccess: (entity) => { setReason(""); onSuccess("self-approved")(entity); },
+  });
+  const error = submit.error ?? approval.error ?? selfApproval.error;
+  const pending = submit.isPending || approval.isPending || selfApproval.isPending;
   const valid = isUuid(entityId);
   const knownItem =
     serverItems.find((s) => s.id === entityId.trim()) ??
     known.find((k) => k.id === entityId.trim());
-  const knownStatus = result?.status ?? knownItem?.status;
+  const selectedResult = result && idOf(result) === entityId.trim() ? result : null;
+  const knownStatus = selectedResult?.status ?? knownItem?.status;
+  const canSelfApprove = valid && (selectedResult ? selectedResult.can_self_approve : knownItem && "canSelfApprove" in knownItem && knownItem.canSelfApprove) === true;
 
   return (
     <section className="card space-y-4" aria-labelledby={`${kind}-approval`}>
@@ -125,6 +146,7 @@ export function ApprovalPanel<T extends Revision>({
                 setLastAction(null);
                 submit.reset();
                 approval.reset();
+                selfApproval.reset();
               }}
             >
               <option value="">{t("gov.approval.select_item")}</option>
@@ -142,7 +164,7 @@ export function ApprovalPanel<T extends Revision>({
           <>
             <input id={id} aria-describedby={hint} list={`${kind}-known`} className="input mono" value={entityId}
               spellCheck={false} aria-invalid={entityId !== "" && !valid}
-              onChange={(e) => { setEntityId(e.target.value); setResult(null); setLastAction(null); submit.reset(); approval.reset(); }} />
+              onChange={(e) => { setEntityId(e.target.value); setResult(null); setLastAction(null); submit.reset(); approval.reset(); selfApproval.reset(); }} />
             <datalist id={`${kind}-known`}>
               {serverItems.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
               {known.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
@@ -170,23 +192,57 @@ export function ApprovalPanel<T extends Revision>({
           title={t("gov.approval.confirm_approve_title", { noun })}
           body={<p>{t("gov.approval.confirm_approve_body")}</p>}
           confirmLabel={t("btn.approve")}
-          disabled={!valid || pending}
+          disabled={!valid || pending || canSelfApprove}
           onConfirm={() => approval.mutate()}
         />
+        {canSelfApprove && (
+          <button type="button" className="btn-secondary" disabled={pending} onClick={() => selfDialog.current?.showModal()}>
+            <ShieldAlert aria-hidden className="size-4" />
+            {t("gov.approval.self_btn")}
+          </button>
+        )}
       </div>
 
+      <dialog
+        ref={selfDialog}
+        aria-labelledby={`${kind}-self-title`}
+        className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-card bg-surface text-fg p-0 shadow-card backdrop:bg-black/50"
+      >
+        <form
+          className="p-6 space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!reason.trim()) return;
+            selfApproval.mutate(reason.trim());
+            selfDialog.current?.close();
+          }}
+        >
+          <h2 id={`${kind}-self-title`}>{t("gov.approval.self_title", { noun })}</h2>
+          <p className="text-sm text-warn" role="note">{t("gov.approval.self_warning")}</p>
+          <Field label={t("gov.approval.self_reason")} hint={t("gov.approval.self_reason_hint", { max: MAX_SELF_APPROVAL_REASON })}>
+            {(id, hint) => (
+              <textarea id={id} aria-describedby={hint} required maxLength={MAX_SELF_APPROVAL_REASON} className="input min-h-24 py-2"
+                value={reason} onChange={(e) => setReason(e.target.value)} />
+            )}
+          </Field>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-secondary" autoFocus onClick={() => selfDialog.current?.close()}>{t("btn.cancel")}</button>
+            <button type="submit" className="btn-primary" disabled={!reason.trim()}>{t("gov.approval.self_confirm")}</button>
+          </div>
+        </form>
+      </dialog>
       <ProblemAlert error={error} />
 
       {knownStatus && (
         <div role="status" aria-live="polite" className="space-y-3 rounded-control border border-border p-4">
           {lastAction && (
             <p className="font-semibold text-pass">
-              {lastAction === "submitted" ? t("gov.approval.submitted_success") : t("gov.approval.approved_success")}
+              {t(lastAction === "submitted" ? "gov.approval.submitted_success" : lastAction === "self-approved" ? "gov.approval.self_success" : "gov.approval.approved_success")}
             </p>
           )}
           <div className="flex flex-wrap items-center gap-2">
             {knownItem && <span className="font-semibold">{knownItem.label}</span>}
-            {result && <span className="text-sm text-fg-muted">v{result.current_version}</span>}
+            {selectedResult && <span className="text-sm text-fg-muted">v{selectedResult.current_version}</span>}
             <GovernanceBadge status={knownStatus} />
           </div>
           <StageTrack status={knownStatus} />

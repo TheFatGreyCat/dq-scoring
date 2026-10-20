@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { advisoryTranslations } from "./advisoryTranslations";
 import { governanceTranslations } from "./governanceTranslations";
 import { privacyTranslations } from "./privacyTranslations";
 import { surfaceTranslations } from "./surfaceTranslations";
@@ -6,6 +7,7 @@ export type Language = "vi" | "en";
 
 export const DICTIONARY = {
   vi: {
+    ...advisoryTranslations.vi,
     ...governanceTranslations.vi,
     ...privacyTranslations.vi,
     ...surfaceTranslations.vi,
@@ -16,6 +18,7 @@ export const DICTIONARY = {
     "nav.policies": "Chính sách (Policies)",
     "nav.templates": "Kho luật & Mẫu",
     "nav.runs": "Lượt đánh giá (Runs)",
+    "nav.my_jobs": "Job của tôi",
     "nav.assessments": "Kết quả & Thẻ điểm",
     "nav.settings": "Cài đặt hệ thống",
     "nav.open": "Mở điều hướng",
@@ -135,6 +138,11 @@ export const DICTIONARY = {
     "import.configure": "Áp dụng ánh xạ và kiểm tra lại",
     "import.success": "Snapshot bất biến đã đăng ký.",
     "import.unsupported": "Chỉ hỗ trợ CSV, Parquet và JSONL phẳng.",
+    "preview.showing": "Hiển thị {shown} / {total} dòng (mẫu giới hạn)",
+    "preview.matches": "{count} / {shown} dòng khớp",
+    "preview.no_columns": "Không có cột để hiển thị.",
+    "preview.no_rows": "Mẫu không có dòng dữ liệu.",
+    "preview.no_match": "Không có dòng nào khớp trong mẫu đang hiển thị.",
     "preview.title": "Xem trước dữ liệu đã che thông tin",
     "preview.sample": "Chỉ hiển thị tối đa 50 dòng mẫu; tìm kiếm không quét toàn bộ dữ liệu.",
     "preview.rows": "{count} dòng",
@@ -192,6 +200,7 @@ export const DICTIONARY = {
     "common.not_found": "Không tìm thấy trang",
   },
   en: {
+    ...advisoryTranslations.en,
     ...governanceTranslations.en,
     ...privacyTranslations.en,
     ...surfaceTranslations.en,
@@ -202,6 +211,7 @@ export const DICTIONARY = {
     "nav.policies": "Policies",
     "nav.templates": "Rule & Template Catalog",
     "nav.runs": "Runs",
+    "nav.my_jobs": "My jobs",
     "nav.assessments": "Assessments",
     "nav.settings": "Settings",
     "nav.open": "Open navigation",
@@ -321,6 +331,11 @@ export const DICTIONARY = {
     "import.configure": "Apply mapping and revalidate",
     "import.success": "Immutable snapshot registered.",
     "import.unsupported": "Only CSV, Parquet and flat JSONL are supported.",
+    "preview.showing": "Showing {shown} of {total} rows (bounded sample)",
+    "preview.matches": "{count} of {shown} shown rows match",
+    "preview.no_columns": "No columns to display.",
+    "preview.no_rows": "The sample contains no rows.",
+    "preview.no_match": "No shown sample rows match.",
     "preview.title": "Redacted dataset preview",
     "preview.sample": "At most 50 sample rows; search does not scan the full dataset.",
     "preview.rows": "{count} rows",

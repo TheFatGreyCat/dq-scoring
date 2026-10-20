@@ -37,6 +37,7 @@ function Nav({ onNavigate, collapsed = false }: { onNavigate?: () => void; colla
     { to: "/policies", label: t("nav.policies"), icon: SlidersHorizontal },
     { to: "/templates", label: t("nav.templates"), icon: BookOpen },
     { to: "/runs", label: t("nav.runs"), icon: Play },
+    { to: "/my-jobs", label: t("nav.my_jobs"), icon: Activity },
     { to: "/assessments", label: t("nav.assessments"), icon: ClipboardCheck },
     { to: "/settings", label: t("nav.settings"), icon: Settings },
   ];

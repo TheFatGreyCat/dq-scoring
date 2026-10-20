@@ -1,8 +1,8 @@
 import { ArrowRight, WifiOff } from "lucide-react";
 import { useEffect } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../../api/client";
-import { TERMINAL_RUN_STATUSES } from "../../api/types";
+import { TERMINAL_RUN_STATUSES, type RunScope } from "../../api/types";
 import { CopyId } from "../../components/CopyId";
 import { PageHeader } from "../../components/Field";
 import { ProblemAlert } from "../../components/ProblemAlert";
@@ -10,12 +10,16 @@ import { RunBadge } from "../../components/StatusBadge";
 import { formatTimestamp } from "../../lib/format";
 import { useI18n } from "../../lib/i18n";
 import { recent } from "../../lib/recent";
+import { ExecutionPanel } from "../operations/ExecutionPanel";
+import { RequestTimeline } from "./RequestTimeline";
 import { useRunStatus } from "./useRunStatus";
 
 export function RunStatusPage() {
   const { t, lang } = useI18n();
   const { runId = "" } = useParams();
-  const query = useRunStatus(runId);
+  const [params] = useSearchParams();
+  const scope: RunScope | undefined = params.get("scope") === "mine" ? "mine" : undefined;
+  const query = useRunStatus(runId, scope);
   const run = query.data;
   const terminal = run ? TERMINAL_RUN_STATUSES.includes(run.status) : false;
   // A failed poll while we still hold data is a transport problem, not a run failure.
@@ -31,7 +35,7 @@ export function RunStatusPage() {
   return (
     <>
       <nav aria-label={t("scorecard.breadcrumb")} className="text-sm text-fg-muted mb-2">
-        <Link to="/runs" className="hover:underline">{t("nav.runs")}</Link> / {t("run.title")}
+        <Link to={scope === "mine" ? "/my-jobs" : "/runs"} className="hover:underline">{t("nav.runs")}</Link> / {t("run.title")}
       </nav>
       <PageHeader title={t("run.title")} />
 
@@ -71,6 +75,9 @@ export function RunStatusPage() {
               </div>
             </dl>
           </section>
+
+          <RequestTimeline runId={runId} scope={scope} runStatus={run.status} active={!terminal} />
+          <ExecutionPanel runId={runId} scope={scope} active={!terminal} />
 
           {run.status === "SUCCEEDED" && run.assessment_id && (
             <section className="card flex flex-wrap items-center justify-between gap-4">

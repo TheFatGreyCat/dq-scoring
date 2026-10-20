@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TriggerRunRequest(BaseModel):
@@ -41,6 +41,8 @@ class RunResponse(BaseModel):
     completed_at: datetime | None = None
     error_message: str | None = None
     assessment_id: UUID | None = None
+    created_by: UUID | None = None
+    owned_by_me: bool = False
     _safe_error = field_validator("error_message", mode="before")(safe_run_error)
 
 
@@ -59,4 +61,35 @@ class RunStatusResponse(BaseModel):
     completed_at: datetime | None = None
     heartbeat_at: datetime | None = None
     attempt_count: int
+    created_by: UUID | None = None
+    owned_by_me: bool = False
     _safe_error = field_validator("error_message", mode="before")(safe_run_error)
+
+
+RUN_EVENT_TYPES = frozenset({"RUN_QUEUED", "RUN_CLAIMED", "RUN_RUNNING", "RUN_SUCCEEDED", "RUN_FAILED", "RUN_CANCELLED"})
+
+
+class RunEventResponse(BaseModel):
+    """Allowlisted projection of run_events; raw event_payload is never exposed."""
+
+    event_id: UUID
+    event_type: str
+    attempt_count: int
+    lease_generation: int | None = None
+    created_at: datetime
+    error_code: str | None = None
+
+    @model_validator(mode="after")
+    def _allowlist(self) -> RunEventResponse:
+        if self.event_type not in RUN_EVENT_TYPES:
+            self.event_type = "RUN_EVENT"
+        if self.event_type != "RUN_FAILED":
+            self.error_code = None
+        else:
+            self.error_code = safe_run_error(self.error_code)
+        return self
+
+
+class RunEventPage(BaseModel):
+    items: list[RunEventResponse]
+    next_cursor: str | None = None

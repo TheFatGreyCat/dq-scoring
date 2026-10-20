@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 import httpx
 import psycopg
@@ -19,6 +21,8 @@ from dq_scoring.adapters.db.postgres_worker_monitor_store import (
 MONITOR_INTERVAL_SECONDS = 5
 MONITOR_STALE_AFTER_SECONDS = 20
 MONITOR_VISIBLE_AGE_SECONDS = 86400
+OBSERVATION_INTERVAL_SECONDS = 5
+OBSERVATION_KEEPALIVE_SECONDS = 30
 logger = logging.getLogger(__name__)
 
 
@@ -179,3 +183,69 @@ def spark_metrics(
         except Exception as error:  # noqa: BLE001
             logger.warning("MASTER_STATUS_UNKNOWN %s", type(error).__name__)
     return metrics
+
+
+def spark_group_id(run_id: UUID, lease_generation: int) -> str:
+    return f"dq-run-{run_id}-g{lease_generation}"
+
+
+class RunSparkObserver:
+    """Publishes the Spark jobs of ONE leased run attempt while it executes.
+
+    Jobs are correlated by a job group bound to run id + lease generation, never by cluster-wide
+    counts. Publication is fenced by the queue; a rejected write means the lease is gone and
+    the observer stops. Spark or DB failures publish nothing (the API then shows unknown/stale).
+    start() and stop() must run on the thread that executes the run (Spark job groups are thread-local).
+    """
+
+    def __init__(
+        self,
+        compute: Any,
+        queue: Any,
+        interval_seconds: float = OBSERVATION_INTERVAL_SECONDS,
+        keepalive_seconds: float = OBSERVATION_KEEPALIVE_SECONDS,
+    ) -> None:
+        self._compute, self._queue = compute, queue
+        self._interval, self._keepalive = interval_seconds, keepalive_seconds
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self, lease: Any) -> None:
+        group = spark_group_id(lease.run_id, lease.lease_generation)
+        self._compute.bind_run_group(group)
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, args=(lease, group, self._stop), name=f"spark-observer-{lease.run_id}", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            if not self._thread.is_alive():
+                self._thread = None
+            self._compute.clear_run_group()
+
+    def _run(self, lease: Any, group: str, stop: threading.Event) -> None:
+        last: dict[str, Any] | None = None
+        last_sent = 0.0
+        while not stop.is_set():
+            try:
+                observation = self._compute.observe_group(group)
+                if stop.is_set():
+                    return
+                if observation:
+                    observation = {**observation, "group_id": group}
+                    now = time.monotonic()
+                    if observation != last or now - last_sent >= self._keepalive:
+                        if not self._queue.record_spark_observation(
+                            lease.run_id, lease.lease_generation, lease.spec.tenant_id, observation
+                        ):
+                            return
+                        last, last_sent = observation, now
+            except Exception as error:  # noqa: BLE001
+                logger.warning("SPARK_OBSERVATION_FAILED %s", type(error).__name__)
+            stop.wait(self._interval)

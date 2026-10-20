@@ -93,6 +93,7 @@ async function send<T>(
   binary = false,
   responseType: "json" | "blob" = "json",
   cache?: RequestCache,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const headers: Record<string, string> = {
     Accept: responseType === "blob" ? "*/*, application/problem+json" : "application/json, application/problem+json",
@@ -100,7 +101,7 @@ async function send<T>(
   if (body !== undefined) headers["Content-Type"] = binary ? "application/octet-stream" : "application/json";
   if (auth && tokens) headers.Authorization = `Bearer ${tokens.access}`;
 
-  const timeout = AbortSignal.timeout(binary || responseType === "blob" ? 120_000 : REQUEST_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(binary || responseType === "blob" ? 120_000 : timeoutMs);
   let res: Response;
   try {
     res = await fetch(API_PREFIX + path, {
@@ -133,14 +134,15 @@ export async function api<T>(
     binary?: boolean;
     responseType?: "json" | "blob";
     cache?: RequestCache;
+    timeoutMs?: number;
   } = {},
 ): Promise<T> {
-  const { body, auth = true, signal, binary = false, responseType = "json", cache } = options;
+  const { body, auth = true, signal, binary = false, responseType = "json", cache, timeoutMs } = options;
   try {
-    return await send<T>(method, path, body, auth, signal, binary, responseType, cache);
+    return await send<T>(method, path, body, auth, signal, binary, responseType, cache, timeoutMs);
   } catch (err) {
     const expired = err instanceof ApiError && err.status === 401 && auth && session.isAuthenticated();
     if (!expired || !(await refreshOnce())) throw err;
-    return send<T>(method, path, body, auth, signal, binary, responseType, cache);
+    return send<T>(method, path, body, auth, signal, binary, responseType, cache, timeoutMs);
   }
 }

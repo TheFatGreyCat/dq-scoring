@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from dq_scoring.core.models import StandardDimension
+from dq_scoring.presentation.api.governance import SelfApprovalReason
 
 
 class CreatePolicyRequest(BaseModel):
@@ -59,6 +60,8 @@ class PolicyResponse(BaseModel):
     created_by: UUID
     created_at: datetime
     dimension_weights: dict[str, float] = Field(default_factory=dict)
+    can_self_approve: bool = False
+    """Caller-specific UI hint: true only when the server would accept an explicit self-approval now."""
 
 
 class SubmitPolicyRequest(BaseModel):
@@ -68,6 +71,11 @@ class SubmitPolicyRequest(BaseModel):
 
 
 class ApprovePolicyRequest(BaseModel):
-    """Payload to approve policy revision."""
+    """Payload to approve policy revision.
+
+    `self_approval_reason` is only honoured when the caller is a WORKSPACE_ADMIN approving a revision
+    they created/submitted; the server decides eligibility, never the client.
+    """
 
     approval_notes: str | None = None
+    self_approval_reason: SelfApprovalReason | None = None

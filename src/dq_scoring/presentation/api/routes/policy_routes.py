@@ -93,12 +93,12 @@ def create_policy(
 
 
 
-def _policy_response(cur: psycopg.Cursor, policy_id: UUID) -> PolicyResponse:
-    """Build the response from what is stored, never from request echoes or defaults."""
+def _policy_response(cur: psycopg.Cursor, policy_id: UUID, user: AuthenticatedUser) -> PolicyResponse:
+    """Build the response from what is stored, never from request echoes or defaults; capabilities are for `user`."""
     cur.execute(
         """
         SELECT policy_id, tenant_id, COALESCE(name, version), status, created_by, created_at,
-               dimension_weights, publication_threshold, gate_rules
+               dimension_weights, publication_threshold, gate_rules, submitted_by
         FROM scoring_policies WHERE policy_id = %s;
         """,
         (policy_id,),
@@ -118,6 +118,9 @@ def _policy_response(cur: psycopg.Cursor, policy_id: UUID) -> PolicyResponse:
         created_by=row[4],
         created_at=row[5],
         dimension_weights=row[6] or {},
+        can_self_approve=governance.can_self_approve(
+            governance.POLICIES, {"status": row[3], "created_by": row[4], "submitted_by": row[9]}, user, cur
+        ),
     )
 
 
@@ -132,7 +135,7 @@ def list_policies(status: Literal["DRAFT", "PENDING_APPROVAL", "ACTIVE", "DEPREC
         params.append(status)
     result = fetch_page(conn, projection="policy_id", source="scoring_policies", predicates=predicates, params=params, order="created_at DESC,policy_id DESC", paging=paging)
     with conn.cursor() as cur:
-        result["items"] = [_policy_response(cur, row["policy_id"]) for row in result["items"]]
+        result["items"] = [_policy_response(cur, row["policy_id"], user) for row in result["items"]]
     return result
 
 
@@ -142,7 +145,7 @@ def get_policy(policy_id: UUID, user: AuthenticatedUser = Depends(get_current_us
         cur.execute("SELECT policy_id FROM scoring_policies WHERE tenant_id=%s AND policy_id=%s", (user.tenant_id, policy_id))
         if not cur.fetchone():
             raise HTTPException(404, detail="RESOURCE_NOT_FOUND")
-        return _policy_response(cur, policy_id)
+        return _policy_response(cur, policy_id, user)
 
 
 @router.post("/{policy_id}/submit", response_model=PolicyResponse)
@@ -155,7 +158,7 @@ def submit_policy(
     """Submit a DRAFT policy revision for independent approval (DRAFT -> PENDING_APPROVAL)."""
     with conn.cursor() as cur:
         governance.submit_for_approval(cur, governance.POLICIES, policy_id, current_user)
-        return _policy_response(cur, policy_id)
+        return _policy_response(cur, policy_id, current_user)
 
 
 @router.post("/{policy_id}/approve", response_model=PolicyResponse)
@@ -167,5 +170,5 @@ def approve_policy(
 ) -> PolicyResponse:
     """AC-003: Approve a PENDING_APPROVAL policy; it supersedes the tenant's ACTIVE policy."""
     with conn.cursor() as cur:
-        governance.approve(cur, governance.POLICIES, policy_id, current_user)
-        return _policy_response(cur, policy_id)
+        governance.approve(cur, governance.POLICIES, policy_id, current_user, req.self_approval_reason)
+        return _policy_response(cur, policy_id, current_user)

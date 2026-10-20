@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from functools import lru_cache
 from uuid import UUID
 
@@ -147,3 +148,40 @@ def check_tenant_access(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Requested resource was not found.",
         )
+
+
+@contextmanager
+def scoped_tenant_connection(dsn: str, tenant_id: UUID) -> Iterator[psycopg.Connection]:
+    """Short, self-owned tenant-scoped transaction for work that must not span a network await.
+
+    Mirrors get_db_connection (protected transport, session validation, RLS role, tenant context)
+    but is opened and closed by the caller, so no connection or transaction outlives the block.
+    """
+    with protected_connect(dsn, autocommit=False) as conn, conn.transaction():
+        validate_api_session(conn)
+        conn.execute("SET LOCAL ROLE dq_app_role;")
+        conn.execute("SELECT set_config('app.current_user_id', '', true);")
+        set_tenant_context(conn, tenant_id)
+        yield conn
+
+
+AI_ERROR_STATUS = {
+    "AI_DISABLED": 503, "AI_NOT_CONFIGURED": 503, "AI_UNAVAILABLE": 503, "AI_TIMEOUT": 504,
+    "AI_INVALID_OUTPUT": 502, "AI_BUSY": 429, "AI_CONTEXT_STALE": 409,
+    "PRIVACY_SCAN_NOT_COMPLETE": 409, "AI_NO_ELIGIBLE_COLUMNS": 422, "AI_CONTEXT_INVALID": 422,
+}
+
+
+def ai_http_error(code: str) -> HTTPException:
+    """Fixed-code HTTP error for advisory AI failures; never carries upstream text."""
+    return HTTPException(status_code=AI_ERROR_STATUS[code], detail=code)
+
+
+def require_active_role(conn: psycopg.Connection, user: AuthenticatedUser, roles: frozenset[str] | None = None) -> None:
+    """Authorize against the CURRENT membership row, not the (possibly stale) token role."""
+    row = conn.execute(
+        "SELECT role FROM tenant_memberships WHERE tenant_id=%s AND user_id=%s AND status='ACTIVE'",
+        (user.tenant_id, user.user_id),
+    ).fetchone()
+    if not row or (roles is not None and row[0] not in roles):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: Role does not have permission for this operation")

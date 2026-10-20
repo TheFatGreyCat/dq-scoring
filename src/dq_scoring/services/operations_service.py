@@ -6,7 +6,9 @@ import boto3
 from botocore.config import Config
 from pydantic import ValidationError
 
+from dq_scoring.adapters.llm.gateway_settings import LlmSettings
 from dq_scoring.presentation.api.schemas.operations_schemas import (
+    AdapterObservation,
     Components,
     MonitorResponse,
     QueueSummary,
@@ -38,7 +40,7 @@ def storage_status(settings, tenant_id):
         return "down"
 
 
-def monitor_snapshot(conn, tenant_id, storage):
+def monitor_snapshot(conn, tenant_id, storage, llm_settings: LlmSettings | None = None):
     now = datetime.now(UTC)
     workers = []
     rows = conn.execute(
@@ -124,8 +126,10 @@ def monitor_snapshot(conn, tenant_id, storage):
         "SELECT count(*) FILTER (WHERE run_status='QUEUED'),count(*) FILTER (WHERE run_status IN ('LEASED','RUNNING')),count(*) FILTER (WHERE run_status='FAILED' AND created_at>=now()-interval '24 hours'),min(created_at) FILTER (WHERE run_status='QUEUED') FROM evaluation_runs WHERE tenant_id=%s",
         (tenant_id,),
     ).fetchone()
+    adapters = adapter_observations(now, "up", storage, workers, llm_settings)
     return MonitorResponse(
         checked_at=now,
+        adapters=adapters,
         components=Components(database="up", storage=storage, spark_master=master),
         workers=workers,
         spark=spark,
@@ -137,3 +141,38 @@ def monitor_snapshot(conn, tenant_id, storage):
         ),
         warnings=["MULTIPLE_EVALUATION_DRIVERS"] if len(drivers) > 1 else [],
     )
+
+
+def adapter_observations(now, database, storage, workers, llm_settings: LlmSettings | None):
+    """Observations with provenance. Nothing here calls an inference endpoint or invents reachability."""
+    evaluation = sorted(
+        (w for w in workers if w.kind == "EVALUATION"), key=lambda w: w.heartbeat_at, reverse=True
+    )
+    fresh = next((w for w in evaluation if w.status != "stale"), None)
+    reported = fresh or (evaluation[0] if evaluation else None)
+    up_worker = next((w for w in evaluation if w.metrics.spark_status == "up"), None)
+    spark = AdapterObservation(name="spark_compute", state="unknown", source="worker_heartbeat")
+    if reported:
+        spark.checked_at = reported.heartbeat_at
+        spark.stale = fresh is None
+        spark.last_success_at = up_worker.heartbeat_at if up_worker else None
+        if fresh and fresh.metrics.spark_status in ("up", "degraded", "down"):
+            spark.state = fresh.metrics.spark_status
+    gateway = AdapterObservation(name="advisory_gateway", state="unknown", source="configuration")
+    if llm_settings is not None:
+        if not llm_settings.enabled:
+            gateway.state = "off"
+        elif not llm_settings.configured:
+            gateway.state = "not_configured"
+    return [
+        AdapterObservation(
+            name="database", state=database, source="probe", checked_at=now,
+            last_success_at=now if database == "up" else None, timeout_seconds=2,
+        ),
+        AdapterObservation(
+            name="storage", state=storage, source="probe", checked_at=now,
+            last_success_at=now if storage == "up" else None, timeout_seconds=1,
+        ),
+        spark,
+        gateway,
+    ]

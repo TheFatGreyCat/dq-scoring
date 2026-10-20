@@ -79,6 +79,7 @@ class QueueSummary(BaseModel):
 
 
 class SparkSummary(BaseModel):
+    scope: Literal["CLUSTER"] = "CLUSTER"
     mode: str | None = None
     expected_executors: int | None = None
     active_executors: int | None = None
@@ -87,10 +88,26 @@ class SparkSummary(BaseModel):
     active_stages: int | None = None
 
 
+AdapterState = Literal["up", "degraded", "down", "unknown", "off", "not_configured"]
+
+
+class AdapterObservation(BaseModel):
+    """One adapter's last observation with provenance. unknown = never/no longer observed; off = disabled by operator."""
+
+    name: Literal["database", "storage", "spark_compute", "advisory_gateway"]
+    state: AdapterState
+    source: Literal["probe", "worker_heartbeat", "configuration"]
+    checked_at: datetime | None = None
+    last_success_at: datetime | None = None
+    stale: bool = False
+    timeout_seconds: float | None = None
+
+
 class MonitorResponse(BaseModel):
     checked_at: datetime
     components: Components
     workers: list[WorkerSnapshot]
     spark: SparkSummary
     queue: QueueSummary
+    adapters: list[AdapterObservation] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

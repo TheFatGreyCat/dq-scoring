@@ -25,6 +25,8 @@ from dq_scoring.core.entities import (
 )
 from dq_scoring.ports.queue_port import IQueuePort
 
+MAX_OBSERVATIONS_PER_ATTEMPT = 500
+
 
 class PostgresQueueAdapter(IQueuePort):
     """PostgreSQL 16 queue implementation with lease fencing and SKIP LOCKED claiming."""
@@ -360,6 +362,55 @@ class PostgresQueueAdapter(IQueuePort):
             )
             row = cur.fetchone()
             return bool(row and row[0] == status.value and row[1] == lease_generation)
+
+    def record_spark_observation(
+        self,
+        run_id: UUID,
+        lease_generation: int,
+        tenant_id: UUID,
+        observation: dict[str, Any],
+    ) -> bool:
+        """Append a run-scoped Spark observation iff the caller still holds the live lease.
+
+        Parent-row locking serializes publication with lifecycle updates and other publishers.
+        Expiry is checked after the lock wait; telemetry is capped per attempt.
+        """
+        with (
+            self._get_connection() as conn,
+            conn.transaction(),
+            conn.cursor() as cur,
+        ):
+            set_tenant_context(conn, tenant_id)
+            cur.execute(
+                "SELECT run_id FROM evaluation_runs WHERE run_id=%s AND tenant_id=%s FOR UPDATE",
+                (run_id, tenant_id),
+            )
+            if cur.fetchone() is None:
+                return False
+            cur.execute(
+                """
+                INSERT INTO run_events (
+                    event_id, tenant_id, run_id, event_type,
+                    attempt_count, lease_generation, event_payload, created_at
+                )
+                SELECT %s, r.tenant_id, r.run_id, 'SPARK_OBSERVED',
+                       r.attempt_count, r.lease_generation, %s, now()
+                FROM evaluation_runs r
+                WHERE r.run_id = %s
+                  AND r.tenant_id = %s
+                  AND r.lease_generation = %s
+                  AND r.run_status IN ('LEASED', 'RUNNING')
+                  AND r.lease_expires_at > clock_timestamp()
+                  AND (
+                      SELECT count(*) FROM run_events e
+                      WHERE e.tenant_id = r.tenant_id AND e.run_id = r.run_id
+                        AND e.lease_generation = r.lease_generation
+                        AND e.event_type = 'SPARK_OBSERVED'
+                  ) < %s;
+                """,
+                (uuid4(), Jsonb(observation), run_id, tenant_id, lease_generation, MAX_OBSERVATIONS_PER_ATTEMPT),
+            )
+            return cur.rowcount == 1
 
     def get_run_status(
         self, run_id: UUID, tenant_id: UUID | None = None

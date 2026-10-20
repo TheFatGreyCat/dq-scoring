@@ -19,6 +19,7 @@ from dq_scoring.presentation.api.routes import (
     privacy_rule_routes,
     privacy_scan_routes,
     ruleset_routes,
+    run_execution_routes,
     run_routes,
     template_routes,
     text_routes,
@@ -56,6 +57,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(ruleset_routes.router)
     app.include_router(policy_routes.router)
     app.include_router(run_routes.router)
+    app.include_router(run_execution_routes.router)
     app.include_router(assessment_routes.router)
     app.include_router(template_routes.router)
     app.include_router(import_routes.router)
