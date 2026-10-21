@@ -129,6 +129,27 @@ def test_expired_session_rejected_across_lifecycle(
     assert register_resp.json()["error_code"] == "IMPORT_EXPIRED"
 
 
+@pytest.mark.parametrize('state', ['VERIFIED', 'REJECTED'])
+def test_expired_configure_cannot_restore_prunable_session(client, db_conn, seeded_tenant_and_users,
+        auth_headers, test_tenant_id, test_user_id, state):
+    from psycopg.types.json import Jsonb
+    upload_id = uuid4()
+    past = datetime.now(UTC) - timedelta(days=3)
+    db_conn.execute(
+        "INSERT INTO dataset_upload_sessions(upload_id,tenant_id,asset_name,client_request_id,format,original_filename,"
+        "size_bytes,staging_key,status,manifest,created_by,created_at,expires_at,updated_at) "
+        "VALUES(%s,%s,'Expired configure',%s,'CSV','expired.csv',1,%s,%s,%s,%s,%s,%s,%s)",
+        (upload_id, test_tenant_id, uuid4(), f'snapshots/{test_tenant_id}/{upload_id}/source.csv', state,
+         Jsonb({'error_code': 'DUPLICATE_COLUMN_NAME'}), test_user_id, past, past, past))
+    db_conn.commit()
+    response = client.post(f'/api/v1/imports/{upload_id}/configure', headers=auth_headers,
+                           json={'column_names': ['a', 'b']})
+    assert response.status_code == 409, response.text
+    assert response.json()['error_code'] == 'IMPORT_EXPIRED'
+    assert db_conn.execute('SELECT status FROM dataset_upload_sessions WHERE upload_id=%s',
+                           (upload_id,)).fetchone() == (state,)
+
+
 # -----------------------------------------------------------------------------
 # 2. Part Replay vs Checksum Conflict
 # -----------------------------------------------------------------------------
@@ -340,3 +361,31 @@ def test_existing_source_cannot_reference_foreign_tenant(client, seeded_tenant_a
 def test_nonadmin_cannot_request_global_staging_scope(client, seeded_tenant_and_users, auth_headers):
     response = client.get("/api/v1/storage/objects?scope=staging", headers=auth_headers)
     assert response.status_code == 403
+
+
+def test_create_waits_for_exclusive_prune_transaction(client, db_conn, seeded_tenant_and_users,
+        auth_headers, test_tenant_id, pg_dsn):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from threading import Event
+
+    from dq_scoring.adapters.db.postgres_import_store import PostgresImportStore
+
+    started = Event()
+    def create():
+        started.set()
+        return client.post('/api/v1/imports', headers=auth_headers, json={
+            'client_request_id': str(uuid4()), 'asset_name': 'Prune contention', 'format': 'CSV',
+            'original_filename': 'synthetic.csv', 'size_bytes': 5})
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(pg_dsn) as pruner, pruner.transaction():
+            PostgresImportStore.lock_tenant_storage(pruner, test_tenant_id, exclusive=True)
+            request = pool.submit(create)
+            assert started.wait(timeout=5)
+            with pytest.raises(TimeoutError):
+                request.result(timeout=0.25)
+            assert db_conn.execute('SELECT count(*) FROM dataset_upload_sessions WHERE tenant_id=%s',
+                                   (test_tenant_id,)).fetchone() == (0,)
+        response = request.result(timeout=10)
+    assert response.status_code == 201, response.text
+    aborted = client.post(f"/api/v1/imports/{response.json()['upload_id']}/abort", headers=auth_headers)
+    assert aborted.status_code == 200, aborted.text

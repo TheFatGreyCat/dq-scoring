@@ -109,7 +109,7 @@ def test_complete_e2e_lifecycle(
 
     # 3. Register Dataset Snapshot
     from tests.support.object_snapshots import register_snapshot_via_api
-    snap = register_snapshot_via_api(client, steward_hdr, pg_dsn, golden_csv_path, asset_id=asset_id)
+    snap = register_snapshot_via_api(client, steward_hdr, pg_dsn, golden_csv_path, asset_id=asset_id, process_full_profile=True)
     snap_id = snap["snapshot_id"]
 
     # 4. Create & Approve Ruleset (4-Eyes)

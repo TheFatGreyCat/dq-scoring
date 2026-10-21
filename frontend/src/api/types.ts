@@ -302,12 +302,56 @@ export interface Recommendations {
 export interface AiStatus { enabled: boolean; model: string | null; recommendations: boolean; narrative: boolean; }
 export type AiEngine = "LLM" | "HYBRID";
 export type AiPriority = "COMPLETENESS" | "VALIDITY" | "UNIQUENESS";
-export interface AiRecommendationRequest { engine: AiEngine; domain: "GENERAL"; priorities: AiPriority[]; }
+export interface AiRecommendationRequest { engine: AiEngine; domain: "GENERAL"; priorities: AiPriority[]; profile_mode?: ProfileMode; }
+
+export interface ProfileScope {
+  mode: ProfileMode; is_sample: boolean; rows: number | null; profile_id: UUID | null; fingerprint: string | null; profiler_version: string | null;
+}
+export type ProfileMode = "SAMPLE" | "FULL";
+export type ProfileState = "QUEUED" | "RUNNING" | "COMPLETE" | "FAILED";
+export interface ProfileColumn {
+  name: string; technical_type?: string; type_hint?: string; null_count: number | null; non_null_count: number | null;
+  distinct_count: number | null; parse_success_count: number | null; parse_target?: string | null; parse_reason?: string | null;
+  min?: string | number; max?: string | number;
+}
+export interface ProfileResult {
+  mode: ProfileMode; profiler_version?: string; sampling_method?: string; is_sample?: boolean;
+  total_rows?: number; scanned_rows?: number; sample_rows?: number; generated_at?: string; columns: ProfileColumn[];
+}
+export interface SnapshotProfile {
+  state: ProfileState | null; current: boolean; stale: boolean; result: ProfileResult | null;
+  profile_id?: UUID; fingerprint?: string; error_code?: string | null; finished_at?: string | null;
+}
+export interface FullProfileSubmission { profile_id: UUID; snapshot_id: UUID; state: ProfileState; fingerprint: string; profiler_version: string; }
+
+export const SEMANTIC_LABELS = [
+  "UNKNOWN", "IDENTIFIER", "CATEGORY", "FREE_TEXT", "QUANTITY", "MONEY", "DATE_TIME", "EMAIL", "PHONE", "ADDRESS", "PERSON_NAME", "BOOLEAN",
+] as const;
+export type SemanticLabel = (typeof SEMANTIC_LABELS)[number];
+export type SemanticProvider = "LOCAL" | "API";
+export interface SemanticColumn {
+  column: string; suggested_label: SemanticLabel; reason_codes: string[]; confidence: number; source: string; protected: boolean;
+  confirmed: { label: SemanticLabel; revision: number; updated_by: UUID; updated_at: string; reason: string } | null;
+}
+export interface SemanticView { vocabulary_version: string; revision: number; columns: SemanticColumn[]; }
+export interface SemanticChange { column: string; label: SemanticLabel | null; }
+export interface SemanticConfirmRequest { expected_revision: number; reason: string; changes: SemanticChange[]; }
+export interface SemanticConfirmResult { revision: number; changed: number; }
+export interface SemanticCandidate { column: string; label: SemanticLabel; reason_codes: string[]; source: SemanticProvider; }
+export interface SemanticInference {
+  candidates: SemanticCandidate[]; rejected: number;
+  provenance: {
+    provider: SemanticProvider; model: string | null; prompt_version: string; vocabulary_version: string; context_sha256: string;
+    semantic_revision: number; privacy_policy_version: number; generated_at: string; columns_sent: number;
+    profile: ProfileScope;
+  };
+}
 export type AiRuleSource = "LLM" | "HEURISTIC" | "HEURISTIC+LLM";
 export interface AiProvenance {
   engine: AiEngine; source: "LLM" | "HYBRID" | "HEURISTIC_FALLBACK"; model: string | null; prompt_version: string;
   context_sha256: string; generated_at: string; fallback: boolean; fallback_code: string | null;
   candidates_rejected: number; columns_sent: number;
+  provider: "API"; vocabulary_version: string; semantic_revision: number; privacy_policy_version: number; profile: ProfileScope;
 }
 export type AiRecommendationItem = Recommendations["rules"][number] & { source: AiRuleSource };
 export interface AiRecommendations extends Omit<Recommendations, "rules"> { rules: AiRecommendationItem[]; provenance: AiProvenance; }

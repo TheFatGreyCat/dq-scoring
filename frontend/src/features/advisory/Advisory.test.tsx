@@ -87,3 +87,11 @@ it("narrative: renders nothing and no error when AI is off and no report exists"
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
 });
+
+it("sends the chosen profile mode with the explicit request", async () => {
+  renderRoute(<AiRecommendationsPanel snapshotId={ID} onMerge={vi.fn()} />, "/x", "/x");
+  await userEvent.selectOptions(await screen.findByLabelText(/profile source/i), "FULL");
+  await userEvent.click(screen.getByRole("button", { name: /generate ai suggestions/i }));
+  await waitFor(() => expect(calls("/recommendations/ai", "POST")).toHaveLength(1));
+  expect(JSON.parse(calls("/recommendations/ai", "POST")[0][1].body)).toMatchObject({ profile_mode: "FULL" });
+});

@@ -263,3 +263,80 @@ Protected-processing helpers. All fail-closed: no value is defaulted when protec
             - {key: spark-defaults.conf, path: spark-defaults.conf}
       {{- end }}
 {{- end }}
+
+{{/* Source store: validation, shared by protected and unprotected rendering. */}}
+{{- define "dq-scoring.sourceStore.validate" -}}
+{{- $s := .Values.sourceStore -}}
+{{- if $s.enabled -}}
+{{- range $k, $v := dict "endpoint" $s.endpoint "bucket" $s.bucket "existingSecret" $s.existingSecret "accessKeyIdKey" $s.accessKeyIdKey "secretAccessKeyKey" $s.secretAccessKeyKey -}}
+{{- if not $v -}}
+{{- fail (printf "sourceStore.%s is required when sourceStore.enabled=true" $k) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $s.tenantPrefixes -}}
+{{- fail "sourceStore.tenantPrefixes is required when sourceStore.enabled=true" -}}
+{{- end -}}
+{{- if and $s.caSecret (not $s.caKey) -}}
+{{- fail "sourceStore.caKey is required with sourceStore.caSecret" -}}
+{{- end -}}
+{{- if .Values.security.protectedProcessing.enabled -}}
+{{- $p := .Values.security.protectedProcessing -}}
+{{- $label := "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" -}}
+{{- $a := $s.allowedService -}}
+{{- if not (and $a.name $a.namespace (regexMatch $label ($a.name | toString)) (regexMatch $label ($a.namespace | toString))) -}}
+{{- fail "sourceStore.allowedService needs an exact service name and namespace (single DNS labels, no wildcard)" -}}
+{{- end -}}
+{{- if or (lt (int $a.port) 1) (gt (int $a.port) 65535) -}}
+{{- fail "sourceStore.allowedService.port must be 1-65535" -}}
+{{- end -}}
+{{- if not $a.podSelector -}}
+{{- fail "sourceStore.allowedService.podSelector must select the service pods" -}}
+{{- end -}}
+{{- $fq := include "dq-scoring.svcFqdn" (dict "svc" $a "cd" $p.clusterDomain) -}}
+{{- if ne $s.endpoint (printf "https://%s:%d" $fq (int $a.port)) -}}
+{{- fail (printf "sourceStore.endpoint must equal https://%s:%d" $fq (int $a.port)) -}}
+{{- end -}}
+{{- if not $s.useSsl -}}
+{{- fail "sourceStore.useSsl must be true when protected processing is enabled" -}}
+{{- end -}}
+{{- if not $s.caSecret -}}
+{{- fail "sourceStore.caSecret is required when protected processing is enabled (dedicated source CA)" -}}
+{{- end -}}
+{{- if has $s.caSecret (list $p.apiTlsSecret $p.caSecret $p.sparkSecuritySecret $s.existingSecret) -}}
+{{- fail "sourceStore.caSecret must be a dedicated Secret distinct from the protected, TLS, Spark and credential Secrets" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/* Source store credentials, injected into API, import and worker containers. */}}
+{{- define "dq-scoring.sourceStore.env" -}}
+{{- if .Values.sourceStore.enabled }}
+- name: DQ_SOURCE_S3_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.sourceStore.existingSecret }}
+      key: {{ .Values.sourceStore.accessKeyIdKey }}
+- name: DQ_SOURCE_S3_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.sourceStore.existingSecret }}
+      key: {{ .Values.sourceStore.secretAccessKeyKey }}
+{{- end }}
+{{- end }}
+
+{{- define "dq-scoring.sourceStore.volumeMount" -}}
+{{- if and .Values.sourceStore.enabled .Values.sourceStore.caSecret }}
+- {name: source-ca, mountPath: /opt/dq/source-ca, readOnly: true}
+{{- end }}
+{{- end }}
+
+{{- define "dq-scoring.sourceStore.volume" -}}
+{{- if and .Values.sourceStore.enabled .Values.sourceStore.caSecret }}
+- name: source-ca
+  secret:
+    secretName: {{ .Values.sourceStore.caSecret }}
+    items:
+      - {key: {{ .Values.sourceStore.caKey }}, path: {{ .Values.sourceStore.caKey }}}
+{{- end }}
+{{- end }}

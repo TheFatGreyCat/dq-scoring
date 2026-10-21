@@ -1,8 +1,9 @@
-"""Import worker executing dataset inspection, preview generation, and canonical normalization."""
+"""Import worker inspecting one immutable raw snapshot under lease fencing."""
 
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -12,19 +13,33 @@ from botocore.exceptions import BotoCoreError, ClientError
 from psycopg.types.json import Jsonb
 from pyarrow import ArrowException
 
+from dq_scoring.adapters.db.postgres_import_store import PostgresImportStore
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
-from dq_scoring.adapters.source.tabular_import import (
-    ImportInspectionException,
-    TabularImportAdapter,
+from dq_scoring.adapters.source.tabular_import import TabularImportAdapter
+from dq_scoring.adapters.source.tabular_normalization import ImportInspectionException
+from dq_scoring.adapters.storage.normalized_snapshot import (
+    legacy_equivalence_witness,
+    resolve_snapshot_source,
+    validate_descriptor,
 )
+from dq_scoring.adapters.storage.s3_object_store import S3ObjectStoreAdapter
 from dq_scoring.adapters.storage.s3_settings import (
     ImportSettings,
     S3Settings,
     get_import_settings,
     get_s3_settings,
 )
+from dq_scoring.adapters.storage.snapshot_objects import SnapshotObjectError
+from dq_scoring.adapters.storage.source_settings import (
+    get_source_settings,
+    source_binding_sha256,
+)
 from dq_scoring.common.privacy import SENSITIVE_CATEGORIES
-from dq_scoring.ports.object_store import IObjectStorePort, ObjectRef
+from dq_scoring.ports.object_store import (
+    IObjectStorePort,
+    ObjectChangedError,
+    ObjectRef,
+)
 from dq_scoring.services.privacy_rule_service import load_pinned_rules
 
 logger = logging.getLogger("dq_scoring.workers.import_worker")
@@ -58,10 +73,7 @@ class ImportWorker:
         self.worker_id = worker_id
         self.s3_settings = s3_settings or get_s3_settings()
         self.import_settings = import_settings or get_import_settings()
-        self.adapter = TabularImportAdapter(
-            store=self.store,
-            temp_root=self.import_settings.temp_root,
-        )
+        self.adapter = TabularImportAdapter(store=self.store)
 
     def heartbeat(self, conn: psycopg.Connection, upload_id: UUID, lease_generation: int) -> bool:
         """Extend active worker lease; returns True if lease remains owned, False if stolen/expired."""
@@ -89,16 +101,31 @@ class ImportWorker:
         lease_expires = now + timedelta(seconds=self.import_settings.lease_seconds)
 
         with conn.cursor() as cur:
+            # Pick the candidate tenant without row locks, take the shared storage lock, then lock the row:
+            # same order as API mutators and the pruner (tenant lock -> row lock), so no lock inversion.
+            cur.execute(
+                """
+                SELECT upload_id, tenant_id FROM dataset_upload_sessions
+                WHERE status = 'STAGED'
+                   OR (status = 'VERIFYING' AND lease_expires_at < now())
+                ORDER BY created_at ASC
+                LIMIT 1;
+                """
+            )
+            candidate = cur.fetchone()
+            if not candidate:
+                return None
+            PostgresImportStore.lock_tenant_storage(conn, candidate[1])
             cur.execute(
                 """
                 SELECT upload_id, tenant_id, lease_generation, attempt_count, status, expires_at
                 FROM dataset_upload_sessions
-                WHERE status = 'STAGED'
-                   OR (status = 'VERIFYING' AND lease_expires_at < now())
-                ORDER BY created_at ASC
-                LIMIT 1
+                WHERE upload_id = %s
+                  AND (status = 'STAGED'
+                       OR (status = 'VERIFYING' AND lease_expires_at < now()))
                 FOR UPDATE SKIP LOCKED;
-                """
+                """,
+                (candidate[0],),
             )
             row = cur.fetchone()
             if not row:
@@ -167,7 +194,7 @@ class ImportWorker:
             }
 
     def process_session(self, conn: psycopg.Connection, session: dict[str, Any]) -> None:
-        """Run inspection, profiling, and canonical Parquet creation under fencing check."""
+        """Inspect raw bytes and publish only the winning lease's descriptor."""
         upload_id = session["upload_id"]
         tenant_id = session["tenant_id"]
         lease_gen = session["lease_generation"]
@@ -175,35 +202,9 @@ class ImportWorker:
         manifest = session["manifest"]
 
         set_tenant_context(conn, tenant_id)
+        PostgresImportStore.lock_tenant_storage(conn, tenant_id)
         pinned = load_pinned_rules(conn, tenant_id)
 
-        # Preflight check: bucket versioning required
-        if not self.store.is_versioning_enabled(self.s3_settings.bucket_snapshots):
-            logger.error("Bucket %s does not have versioning enabled", self.s3_settings.bucket_snapshots)
-            patch = {"error_code": "SNAPSHOT_VERSIONING_REQUIRED"}
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE dataset_upload_sessions
-                    SET status = 'FAILED',
-                        error_reason = 'SNAPSHOT_VERSIONING_REQUIRED',
-                        manifest = COALESCE(manifest, '{}'::jsonb) || %s::jsonb,
-                        updated_at = now()
-                    WHERE upload_id = %s
-                      AND lease_generation = %s
-                      AND lease_owner = %s
-                      AND lease_expires_at >= now()
-                      AND status = 'VERIFYING';
-                    """,
-                    (Jsonb(patch), upload_id, lease_gen, self.worker_id),
-                )
-            return
-
-        staging_bucket = manifest.get("staging_bucket") or self.s3_settings.bucket_staging
-        staging_key = session["staging_key"]
-        source_ref = ObjectRef(bucket=staging_bucket, key=staging_key)
-
-        dest_prefix = f"snapshots/{tenant_id}/{upload_id}/attempt-{lease_gen}"
         col_mapping = manifest.get("column_names_mapping")
         csv_opts = manifest.get("csv_options") or {}
         delimiter = csv_opts.get("delimiter", ",")
@@ -214,16 +215,52 @@ class ImportWorker:
         if asset_id:
             initial_policy_version, extra_cols = _declared_protection(conn, tenant_id, asset_id)
 
+        inspection = None
         try:
-            selected = manifest.get("source_ref")
-            if selected:
-                current = self.store.head(source_ref)
-                if current.etag != selected.get("etag") or current.version_id != selected.get("version_id") or current.size_bytes != selected.get("size_bytes"):
-                    raise ImportInspectionException("OBJECT_CHANGED", "Selected source changed before validation.")
-            inspection = self.adapter.inspect_and_normalize(
+            source_store = self.store
+            storage_mode = manifest.get('storage_mode', 'OWNED_RAW')
+            selected = manifest.get('source_ref') or {}
+            source_ref = ObjectRef(manifest.get('staging_bucket') or self.s3_settings.bucket_staging,
+                                   session['staging_key'], selected.get('version_id'))
+            reuse_owned = False
+            previous = manifest.get('source_descriptor')
+            frozen = manifest.get('owned_raw_ref')
+            if previous and previous.get('descriptor_version') == 2 and previous.get('storage_mode') == 'OWNED_RAW':
+                source_store, source_ref, _ = resolve_snapshot_source(tenant_id, previous, self.store, self.s3_settings)
+                reuse_owned = True
+            elif frozen:
+                source_ref = ObjectRef(**frozen)
+                if source_ref.bucket != self.s3_settings.bucket_snapshots or not source_ref.key.startswith(f'snapshots/{tenant_id}/{upload_id}/') or not source_ref.version_id or source_ref.version_id == 'null' or any(p in ('', '.', '..') for p in source_ref.key.split('/')) or '\\' in source_ref.key:
+                    raise ImportInspectionException('STORAGE_VIOLATION', 'Invalid retained raw object.')
+                reuse_owned = True
+            elif selected.get('source_id') == 'shared':
+                config = get_source_settings()
+                config.validate_owned_separation(self.s3_settings)
+                if not config.enabled or config.bucket != source_ref.bucket or not any(source_ref.key.startswith(p) for p in config.tenant_prefixes.get(tenant_id, [])):
+                    raise ImportInspectionException('TENANT_ISOLATION_VIOLATION', 'Source is not authorized.')
+                if manifest.get('source_binding_sha256') != source_binding_sha256(config):
+                    raise ImportInspectionException('STORAGE_VIOLATION', 'Source binding changed.')
+                source_store = S3ObjectStoreAdapter(config.as_s3_settings())
+            elif manifest.get('upload_layout_version') == 2:
+                expected_key = f'snapshots/{tenant_id}/{upload_id}/source.{fmt.lower()}'
+                if source_ref.bucket != self.s3_settings.bucket_snapshots or source_ref.key != expected_key:
+                    raise ImportInspectionException('STORAGE_VIOLATION', 'Invalid upload object.')
+                reuse_owned = True
+            elif source_ref.bucket != self.s3_settings.bucket_staging:
+                raise ImportInspectionException('STORAGE_VIOLATION', 'Invalid staging bucket.')
+            if selected and not reuse_owned:
+                current = source_store.head(source_ref)
+                current_version = current.version_id if current.version_id not in (None, '', 'null') else None
+                if current.etag != selected.get('etag') or current_version != selected.get('version_id') or current.size_bytes != selected.get('size_bytes'):
+                    raise ImportInspectionException('OBJECT_CHANGED', 'Selected source metadata changed.')
+            inspection = self.adapter.inspect_snapshot(
                 source=source_ref,
+                source_store=source_store,
+                storage_mode=storage_mode,
+                source_id=None if reuse_owned else selected.get('source_id'),
+                reuse_owned=reuse_owned,
                 destination_bucket=self.s3_settings.bucket_snapshots,
-                destination_prefix=dest_prefix,
+                destination_prefix=f'snapshots/{tenant_id}/{upload_id}',
                 file_format=fmt,
                 column_names_mapping=col_mapping,
                 delimiter=delimiter,
@@ -234,26 +271,25 @@ class ImportWorker:
             if asset_id and _declared_protection(conn, tenant_id, asset_id)[0] != initial_policy_version:
                 raise ImportInspectionException("POLICY_CHANGED", "Asset protection policy changed during inspection.")
             source_descriptor = {
+                'descriptor_version': 2,
+                'storage_mode': inspection.storage_mode,
                 "bucket": inspection.raw_ref.bucket,
                 "key": inspection.raw_ref.key,
                 "version_id": inspection.raw_ref.version_id,
                 "content_sha256": inspection.raw_sha256,
                 "size_bytes": inspection.raw_size_bytes,
                 "format": fmt,
-                "canonical": {
-                    "bucket": inspection.canonical_ref.bucket,
-                    "key": inspection.canonical_ref.key,
-                    "version_id": inspection.canonical_ref.version_id,
-                    "content_sha256": inspection.canonical_sha256,
-                    "size_bytes": inspection.canonical_size_bytes,
-                    "format": "PARQUET",
-                    "s3a_uri": inspection.canonical_ref.s3a_uri,
-                },
                 "normalization_version": inspection.normalization_version,
+                'normalization': {**asdict(inspection.normalization), 'columns': list(inspection.normalization.columns)},
             }
+            if storage_mode == 'EXTERNAL_VERSION':
+                source_descriptor.update(source_id='shared', source_binding_sha256=manifest['source_binding_sha256'])
+            validate_descriptor(source_descriptor)
+            witness = legacy_equivalence_witness(conn, tenant_id, asset_id, source_descriptor, self.store, self.s3_settings)
 
             patch = {
                 "source_descriptor": source_descriptor,
+                'legacy_equivalence': witness,
                 "columns": inspection.columns,
                 "exact_row_count": inspection.exact_row_count,
                 "preview": inspection.preview_rows,
@@ -287,7 +323,7 @@ class ImportWorker:
                     """,
                     (
                         inspection.raw_sha256,
-                        inspection.canonical_ref.s3a_uri,
+                        inspection.raw_ref.s3a_uri,
                         Jsonb(patch),
                         upload_id,
                         lease_gen,
@@ -298,43 +334,31 @@ class ImportWorker:
                     logger.warning("Fencing conflict: lease expired or preempted for session %s", upload_id)
 
         except ImportInspectionException as exc:
-            patch = {
-                "error_code": exc.error_code,
-                "invalid_params": exc.invalid_params,
-            }
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE dataset_upload_sessions
-                    SET status = 'REJECTED',
-                        error_reason = %s,
-                        manifest = COALESCE(manifest, '{}'::jsonb) || %s::jsonb,
-                        updated_at = now()
-                    WHERE upload_id = %s
-                      AND lease_generation = %s
-                      AND lease_owner = %s
-                      AND lease_expires_at >= now()
-                      AND status = 'VERIFYING';
-                    """,
-                    (exc.error_code, Jsonb(patch), upload_id, lease_gen, self.worker_id),
-                )
+            frozen_ref = getattr(exc, 'raw_ref', None) or (inspection.raw_ref if inspection else None)
+            self._inspection_failure(conn, upload_id, lease_gen, exc.error_code, exc.invalid_params,
+                                     raw_ref=frozen_ref if storage_mode == 'OWNED_RAW' else None)
 
+        except SnapshotObjectError as exc:
+            self._inspection_failure(conn, upload_id, lease_gen, exc.code,
+                raw_ref=inspection.raw_ref if inspection and inspection.storage_mode == 'OWNED_RAW' else None)
+        except ObjectChangedError:
+            self._inspection_failure(conn, upload_id, lease_gen, 'OBJECT_CHANGED')
+        except FileNotFoundError:
+            self._inspection_failure(conn, upload_id, lease_gen, 'RESOURCE_NOT_FOUND')
         except (BotoCoreError, ClientError, OSError, ArrowException, ValueError):
-            logger.error("Unexpected import failure for upload %s", upload_id)
-            patch = {"error_code": "INTERNAL_WORKER_ERROR"}
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE dataset_upload_sessions
-                    SET status = 'FAILED',
-                        error_reason = 'INTERNAL_WORKER_ERROR',
-                        manifest = COALESCE(manifest, '{}'::jsonb) || %s::jsonb,
-                        updated_at = now()
-                    WHERE upload_id = %s
-                      AND lease_generation = %s
-                      AND lease_owner = %s
-                      AND lease_expires_at >= now()
-                      AND status = 'VERIFYING';
-                    """,
-                    (Jsonb(patch), upload_id, lease_gen, self.worker_id),
-                )
+            self._inspection_failure(conn, upload_id, lease_gen, 'STORAGE_UNAVAILABLE',
+                raw_ref=inspection.raw_ref if inspection and inspection.storage_mode == 'OWNED_RAW' else None)
+
+    def _inspection_failure(self, conn, upload_id: UUID, lease_gen: int, code: str, invalid_params=None, *, raw_ref=None) -> None:
+        patch = {'error_code': code, 'invalid_params': invalid_params}
+        if raw_ref is not None:
+            patch['owned_raw_ref'] = asdict(raw_ref)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dataset_upload_sessions SET status='REJECTED',error_reason=%s,"
+                "manifest=COALESCE(manifest,'{}'::jsonb)||%s::jsonb,updated_at=now() "
+                "WHERE upload_id=%s AND lease_generation=%s AND lease_owner=%s "
+                "AND lease_expires_at>=now() AND status='VERIFYING'",
+                (code, Jsonb(patch), upload_id, lease_gen, self.worker_id),
+            )
+

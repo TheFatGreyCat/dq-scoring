@@ -90,6 +90,13 @@ spec:
                 secretKeyRef:
                   name: {{ $root.Values.minio.existingSecret }}
                   key: {{ $root.Values.minio.secretAccessKeyKey }}
+            {{- include "dq-scoring.sourceStore.env" $root | nindent 12 }}
+            - {name: DQ_SPARK_OBJECT_STORE_ACCESS_KEY_ID_KEY, value: {{ $root.Values.minio.accessKeyIdKey | quote }}}
+            - {name: DQ_SPARK_OBJECT_STORE_SECRET_ACCESS_KEY_KEY, value: {{ $root.Values.minio.secretAccessKeyKey | quote }}}
+            {{- if $root.Values.sourceStore.enabled }}
+            - {name: DQ_SOURCE_S3_ACCESS_KEY_ID_KEY, value: {{ $root.Values.sourceStore.accessKeyIdKey | quote }}}
+            - {name: DQ_SOURCE_S3_SECRET_ACCESS_KEY_KEY, value: {{ $root.Values.sourceStore.secretAccessKeyKey | quote }}}
+            {{- end }}
             - name: DQ_SPARK_DRIVER_HOST
               valueFrom:
                 fieldRef: {fieldPath: status.podIP}
@@ -135,6 +142,7 @@ spec:
               subPath: spark-defaults.conf
               readOnly: true
             {{- end }}
+            {{- include "dq-scoring.sourceStore.volumeMount" $root | nindent 12 }}
       volumes:
         {{- if $root.Values.security.protectedProcessing.enabled }}
         - name: scratch
@@ -153,6 +161,7 @@ spec:
           configMap:
             name: {{ include "dq-scoring.fullname" $root }}-spark-config
         {{- end }}
+        {{- include "dq-scoring.sourceStore.volume" $root | nindent 8 }}
 {{- end }}
 {{- end }}
 {{- end }}

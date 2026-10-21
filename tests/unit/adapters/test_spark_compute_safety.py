@@ -134,9 +134,7 @@ def test_reject_cross_tenant_snapshot_key(spark_adapter, snapshot) -> None:
 
 def test_reject_tampered_content_hash(spark_adapter, snapshot) -> None:
     desc = dict(snapshot.source_descriptor)
-    canonical = dict(desc["canonical"])
-    canonical["content_sha256"] = "1" * 64
-    desc["canonical"] = canonical
+    desc['content_sha256'] = '1' * 64
     tampered_snap = DatasetSnapshot(
         snapshot_id=uuid4(),
         tenant_id=snapshot.tenant_id,

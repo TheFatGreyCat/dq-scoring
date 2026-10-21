@@ -13,12 +13,21 @@ DISALLOWED_FILENAME_CHARS = re.compile(r"[\x00-\x1f\x7f\\/]")
 
 
 class SourceObject(BaseModel):
-    """Reference to an existing object in storage to be staged."""
+    """Reference to an existing object: owned staging (source_id null) or the operator-configured shared source."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
+    source_id: Literal["shared"] | None = None
     bucket: str = Field(min_length=1, max_length=255)
     key: str = Field(min_length=1, max_length=1024)
+    version_id: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @field_validator("version_id")
+    @classmethod
+    def validate_version_id(cls, v: str | None) -> str | None:
+        if v is not None and (v.strip() != v or v == "null" or any(ord(c) < 32 or ord(c) == 127 for c in v)):
+            raise ValueError("Invalid object version id")
+        return v
 
     @field_validator("key")
     @classmethod

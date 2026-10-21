@@ -14,7 +14,7 @@ from tests.integration.conftest import Tenant
 PASSWORD = "Synthetic-Password-123!"
 FIXTURE_CSV = Path(__file__).resolve().parents[2] / "fixtures" / "audit" / "tiny.csv"
 
-def _snapshot(client: TestClient, t: Tenant) -> tuple[str, str]:
+def _snapshot(client: TestClient, t: Tenant, *, process_full_profile: bool = False) -> tuple[str, str]:
     from tests.support.object_snapshots import register_snapshot_via_api
     snap = register_snapshot_via_api(
         client,
@@ -22,6 +22,7 @@ def _snapshot(client: TestClient, t: Tenant) -> tuple[str, str]:
         content_or_path=FIXTURE_CSV,
         file_format="CSV",
         filename="tiny.csv",
+        process_full_profile=process_full_profile,
     )
     return snap["asset_id"], snap["snapshot_id"]
 
@@ -59,7 +60,7 @@ def _active_policy(client: TestClient, t: Tenant, **overrides: object) -> str:
 
 def test_run_uses_the_approved_policy_settings(client: TestClient, tenant: Tenant, db_conn) -> None:
     """C1: thresholds, coverage and weights from the approved policy reach the queued RunSpec."""
-    asset_id, snapshot_id = _snapshot(client, tenant)
+    asset_id, snapshot_id = _snapshot(client, tenant, process_full_profile=True)
     ruleset_id = _active_ruleset(client, tenant, asset_id)
     policy_id = _active_policy(
         client,
@@ -214,7 +215,7 @@ def test_concurrent_triggers_with_one_idempotency_key_create_one_run(client: Tes
     """H8: simultaneous retries with the same key must all resolve to a single run."""
     import threading
 
-    asset_id, snapshot_id = _snapshot(client, tenant)
+    asset_id, snapshot_id = _snapshot(client, tenant, process_full_profile=True)
     body = {
         "snapshot_id": snapshot_id,
         "ruleset_id": _active_ruleset(client, tenant, asset_id),
@@ -254,7 +255,7 @@ def test_scorecard_reports_stored_weighted_coverage_and_advisory_rows(client: Te
     from dq_scoring.services.evaluation_orchestrator import EvaluationOrchestrator
     from dq_scoring.workers.evaluation_worker import EvaluationWorker
 
-    asset_id, snapshot_id = _snapshot(client, tenant)
+    asset_id, snapshot_id = _snapshot(client, tenant, process_full_profile=True)
     rules = [
         {"rule_code": "C_HEAVY", "dimension": "COMPLETENESS", "rule_type": "NON_NULL", "parameters": {"column": "id"}, "contribution_weight": 3.0},
         {"rule_code": "C_LIGHT", "dimension": "COMPLETENESS", "rule_type": "NON_NULL", "parameters": {"column": "amount"}, "contribution_weight": 1.0},

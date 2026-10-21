@@ -19,6 +19,7 @@ from dq_scoring.core.entities import (
 )
 from dq_scoring.core.models import PublicationStatus, QualityGateStatus, ScoringPolicy
 from dq_scoring.services.evaluation_orchestrator import EvaluationOrchestrator
+from tests.support.run_seed import synthetic_full_profile
 
 
 def _create_setup():
@@ -55,6 +56,7 @@ def _create_setup():
         captured_at=datetime.now(UTC),
     )
     compute.register_snapshot(snapshot)
+    queue.set_profile_ready(snapshot, synthetic_full_profile(snapshot))
     rule = QualityRule(
         rule_id=uuid4(),
         rule_code="R1",

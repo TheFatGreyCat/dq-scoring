@@ -14,11 +14,17 @@ from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
+from dq_scoring.adapters.source.tabular_normalization import ImportInspectionException
+from dq_scoring.adapters.storage.normalized_snapshot import (
+    open_normalized_snapshot,
+    resolve_snapshot_source,
+)
 from dq_scoring.adapters.storage.s3_settings import S3Settings
 from dq_scoring.adapters.storage.snapshot_objects import (
     SnapshotObjectError,
-    spool_canonical,
+    verify_pinned_object,
 )
+from dq_scoring.adapters.storage.source_settings import get_source_settings
 from dq_scoring.common.privacy import REDACTED_SENTINEL
 from dq_scoring.ports.object_store import IObjectStorePort
 from dq_scoring.presentation.api.pagination import Pagination, fetch_page
@@ -27,7 +33,6 @@ from dq_scoring.services.privacy_policy import (
     resolve_snapshot_protection,
 )
 
-EXPORT_BATCH_ROWS = 65_536
 
 @dataclass(frozen=True)
 class MaskedExportArtifact:
@@ -305,7 +310,7 @@ class PrivacyService:
         snapshot_id: UUID | None,
         workdir: Path,
     ) -> MaskedExportArtifact:
-        """Stream the pinned canonical Parquet through the shared resolver into `workdir`.
+        """Stream pinned normalized batches into the requested masked artifact.
 
         The caller's transaction is committed before object I/O (no DB transaction spans storage reads) and a
         fresh tenant-scoped transaction rechecks the protection state before the artifact is released.
@@ -319,7 +324,7 @@ class PrivacyService:
         slug, current_snapshot_id = asset_row
         snapshot_id = snapshot_id or current_snapshot_id
         snap_row = snapshot_id and conn.execute(
-            "SELECT source_descriptor FROM dataset_snapshots WHERE tenant_id = %s AND asset_id = %s AND snapshot_id = %s",
+            "SELECT source_descriptor, schema_definition FROM dataset_snapshots WHERE tenant_id = %s AND asset_id = %s AND snapshot_id = %s",
             (tenant_id, asset_id, snapshot_id),
         ).fetchone()
         if not snap_row:
@@ -328,27 +333,37 @@ class PrivacyService:
         protected = resolved.protected_columns
         conn.commit()
 
-        source, out = workdir / "source.parquet", workdir / "masked.parquet"
+        out = workdir / 'masked.parquet'
         try:
-            spool_canonical(store, tenant_id, snap_row[0], s3_settings.bucket_snapshots, source)
-            parquet = pq.ParquetFile(source)
-            schema = pa.schema([
-                pa.field(f.name, pa.string()) if f.name in protected else f for f in parquet.schema_arrow
-            ])
-            with pq.ParquetWriter(out, schema) as writer:
-                for batch in parquet.iter_batches(batch_size=EXPORT_BATCH_ROWS):
-                    writer.write_batch(pa.RecordBatch.from_arrays(
-                        [_mask_array(batch.column(i)) if name in protected else batch.column(i)
-                         for i, name in enumerate(batch.schema.names)],
-                        schema=schema,
-                    ))
+            with open_normalized_snapshot(tenant_id, snap_row[0], store, s3_settings,
+                                          source_settings=get_source_settings()) as batches:
+                writer = None
+                try:
+                    for batch in batches:
+                        if writer is None:
+                            schema = pa.schema([pa.field(f.name, pa.string()) if f.name in protected else f
+                                                for f in batch.schema])
+                            writer = pq.ParquetWriter(out, schema)
+                        writer.write_batch(pa.RecordBatch.from_arrays(
+                            [_mask_array(batch.column(i)) if name in protected else batch.column(i)
+                             for i, name in enumerate(batch.schema.names)], schema=schema))
+                finally:
+                    if writer is not None:
+                        writer.close()
+            if snap_row[0].get('descriptor_version') == 2:
+                source_store, ref, _ = resolve_snapshot_source(tenant_id, snap_row[0], store,
+                    s3_settings, get_source_settings())
+                verify_pinned_object(source_store, ref, snap_row[0], full=True)
         except SnapshotObjectError as exc:
-            status = 503 if exc.code == "STORAGE_UNAVAILABLE" else 409
+            out.unlink(missing_ok=True)
+            status = 503 if exc.code == 'STORAGE_UNAVAILABLE' else 409
             raise HTTPException(status_code=status, detail=exc.code) from exc
-        except (pa.ArrowException, OSError) as exc:
-            raise HTTPException(status_code=409, detail="MALFORMED_IMPORT") from exc
-        finally:
-            source.unlink(missing_ok=True)
+        except (pa.ArrowException, ImportInspectionException, OSError) as exc:
+            out.unlink(missing_ok=True)
+            raise HTTPException(status_code=409, detail='MALFORMED_IMPORT') from exc
+        except BaseException:
+            out.unlink(missing_ok=True)
+            raise
 
         try:
             begin_tenant_transaction(conn, tenant_id)

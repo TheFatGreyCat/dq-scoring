@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -81,8 +82,12 @@ class IObjectStorePort(Protocol):
         """Retrieve object metadata without reading object body."""
         ...
 
-    def open_stream(self, ref: ObjectRef) -> BinaryIO:
-        """Open a readable binary stream for the object. Caller must close."""
+    def open_stream(self, ref: ObjectRef, *, if_match_etag: str | None = None) -> BinaryIO:
+        """Open a readable binary stream; if_match_etag makes GET conditional (ObjectChangedError on mismatch). Caller must close."""
+        ...
+
+    def open_range(self, ref: ObjectRef, offset: int, length: int) -> BinaryIO:
+        """Read a bounded byte range of an exact version; caller closes the body."""
         ...
 
     def list_objects(
@@ -145,4 +150,12 @@ class IObjectStorePort(Protocol):
 
     def put_file(self, bucket: str, key: str, path: Path) -> ObjectMetadata:
         """Upload local file to bucket/key and return object metadata."""
+        ...
+
+    def list_versions(self, bucket: str, prefix: str) -> Iterator[ObjectMetadata]:
+        """Yield real object versions (never delete markers) under prefix; unversioned buckets yield version_id None."""
+        ...
+
+    def delete_version(self, ref: ObjectRef) -> None:
+        """Delete exactly one non-null version. FileNotFoundError if absent, PermissionError if denied or locked."""
         ...

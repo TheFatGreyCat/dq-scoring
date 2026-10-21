@@ -13,6 +13,7 @@ import argparse
 import json
 import subprocess
 import sys
+import urllib.parse
 
 
 def _run_kubectl(args: list[str], *, kubeconfig: str | None = None) -> tuple[int, str, str]:
@@ -57,6 +58,114 @@ def _exec_in_pod(
         kubeconfig=kubeconfig,
     )
     return code, stdout
+
+
+def _source_config(namespace: str, release: str, kubeconfig: str | None) -> dict[str, str] | None:
+    """Enabled source config, empty when disabled, None when availability is unproven."""
+    code, out, _ = _run_kubectl(['get', 'configmap', f'{release}-dq-scoring-config', '-n', namespace, '-o', 'json'], kubeconfig=kubeconfig)
+    if code != 0:
+        return None
+    try:
+        data = json.loads(out)['data']
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    return data if isinstance(data, dict) and data.get('DQ_SOURCE_S3_ENABLED') == 'true' else {}
+
+
+def _source_service(cm_data: dict[str, str]) -> tuple[str, str, str, int] | None:
+    """Exact Kubernetes Service identity from the operator source endpoint."""
+    try:
+        url = urllib.parse.urlparse(cm_data.get('DQ_SOURCE_S3_ENDPOINT_URL', ''))
+        labels = (url.hostname or '').split('.')
+        if url.scheme != 'https' or len(labels) < 4 or labels[2] != 'svc' or url.username or url.password or url.query or url.fragment or url.path not in ('', '/'):
+            return None
+        return labels[0], labels[1], url.hostname or '', url.port or 443
+    except ValueError:
+        return None
+
+
+def _is_source_service_rule(egress: dict, namespace: str, selector: dict[str, str], port: int) -> bool:
+    ports = [p for to_ports in egress.get("toPorts", []) for p in to_ports.get("ports", [])]
+    if not ports or any(p.get("port") != str(port) or p.get("protocol") != "TCP" for p in ports):
+        return False
+    for endpoint in egress.get("toEndpoints", []):
+        labels = {k.removeprefix("k8s:"): v for k, v in endpoint.get("matchLabels", {}).items()}
+        if labels.pop("io.kubernetes.pod.namespace", None) == namespace and labels == selector:
+            return True
+    return False
+
+
+def _check_source_egress(namespace: str, release: str, policies: list[dict], cm_data: dict[str, str], kubeconfig: str | None) -> bool:
+    """Every role policy must allow exactly the configured source service (namespace, live pod selector, port) and its DNS name."""
+    service = _source_service(cm_data)
+    if service is None:
+        print("  [FAIL] Enabled source endpoint must be https://<service>.<namespace>.svc.<domain>[:port]")
+        return False
+    name, svc_namespace, host, port = service
+    code, out, _ = _run_kubectl(["get", "service", name, "-n", svc_namespace, "-o", "json"], kubeconfig=kubeconfig)
+    try:
+        selector = json.loads(out).get("spec", {}).get("selector") if code == 0 else None
+    except (json.JSONDecodeError, AttributeError):
+        selector = None
+    if not selector:
+        print(f"  [FAIL] Source service '{svc_namespace}/{name}' not found or has no pod selector")
+        return False
+    for role in ("api", "import", "driver", "executor"):
+        egress = [
+            rule
+            for cnp in policies
+            if cnp.get("metadata", {}).get("name", "").startswith(f"{release}-dq-scoring-{role}")
+            for rule in cnp.get("spec", {}).get("egress", [])
+        ]
+        if not any(_is_source_service_rule(rule, svc_namespace, selector, port) for rule in egress):
+            print(f"  [FAIL] {role} CiliumNetworkPolicy lacks exact source service egress {svc_namespace}/{name}:{port}")
+            return False
+        dns_names = {d.get("matchName") for rule in egress for to_ports in rule.get("toPorts", []) for d in to_ports.get("rules", {}).get("dns", [])}
+        if host not in dns_names:
+            print(f"  [FAIL] {role} CiliumNetworkPolicy lacks exact DNS permission for source host '{host}'")
+            return False
+    return True
+
+
+def _source_tls_probe(host: str, port: int, good_pem: str, wrong_pem: str) -> str:
+    return (
+        "import socket, ssl\n"
+        f"host, port, good, wrong = {host!r}, {port}, {good_pem!r}, {wrong_pem!r}\n"
+        "def connect(pem):\n"
+        "    ctx = ssl.create_default_context(cadata=pem) if pem else ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)\n"
+        "    with socket.create_connection((host, port), timeout=5) as raw:\n"
+        "        with ctx.wrap_socket(raw, server_hostname=host) as tls:\n"
+        "            return tls.version()\n"
+        "assert connect(good) in ('TLSv1.2', 'TLSv1.3')\n"
+        "try:\n"
+        "    connect(wrong)\n"
+        "except ssl.SSLCertVerificationError:\n"
+        "    print('SOURCE_TLS_VERIFIED')\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+
+def _check_source_tls(namespace: str, cm_data: dict[str, str], pod_worker: str, pod_probe: str, kubeconfig: str | None) -> bool:
+    """Driver and executor probes verify source TLS with the dedicated source CA."""
+    service = _source_service(cm_data)
+    if service is None:
+        print("  [FAIL] Enabled source endpoint must be https://<service>.<namespace>.svc.<domain>[:port]")
+        return False
+    _, _, host, port = service
+    read_good = f"print(open({cm_data.get('DQ_SOURCE_S3_CA_BUNDLE', '')!r}).read())"
+    good_code, good_pem = _exec_in_pod(namespace, pod_worker, 'worker', read_good, kubeconfig=kubeconfig)
+    wrong_pem = ''
+    if good_code != 0 or 'BEGIN CERTIFICATE' not in good_pem:
+        print('  [FAIL] Dedicated source CA must be readable in the worker')
+        return False
+    probe = _source_tls_probe(host, port, good_pem, wrong_pem)
+    for pod, container, role in ((pod_worker, "worker", "driver"), (pod_probe, "probe", "executor")):
+        code, result = _exec_in_pod(namespace, pod, container, probe, kubeconfig=kubeconfig)
+        if code != 0 or result != "SOURCE_TLS_VERIFIED":
+            print(f"  [FAIL] Source TLS with the dedicated CA (and rejection of an invalid CA) failed for {role}")
+            return False
+    return True
 
 
 def check_crds(kubeconfig: str | None) -> bool:
@@ -218,6 +327,13 @@ def check_network_policies(namespace: str, release: str, kubeconfig: str | None)
             if not any(name.startswith(prefix) for name in cnp_names):
                 print(f"  [FAIL] Missing required CiliumNetworkPolicy with prefix '{prefix}'")
                 return False
+
+        source_cm = _source_config(namespace, release, kubeconfig)
+        if source_cm is None:
+            print('  [FAIL] Source configuration cannot be inspected')
+            return False
+        if source_cm and not _check_source_egress(namespace, release, items, source_cm, kubeconfig):
+            return False
 
         for cnp in items:
             name = cnp.get("metadata", {}).get("name", "")
@@ -387,6 +503,30 @@ def check_secret_isolation_and_config(namespace: str, release: str, kubeconfig: 
         for comp, deps in deployments_by_comp.items()
     }
 
+    # 2b. Source store: enabled source must use HTTPS, a dedicated mounted CA and secretKeyRef credentials everywhere.
+    if cm_data.get("DQ_SOURCE_S3_ENABLED") == "true":
+        endpoint = cm_data.get("DQ_SOURCE_S3_ENDPOINT_URL", "")
+        ca_bundle = cm_data.get("DQ_SOURCE_S3_CA_BUNDLE", "")
+        ca_secret = cm_data.get("DQ_SOURCE_S3_CA_SECRET", "")
+        if not endpoint.startswith("https://") or cm_data.get("DQ_SOURCE_S3_USE_SSL") != "true":
+            print("  [FAIL] Enabled source store must use an HTTPS endpoint with SSL enabled")
+            return False
+        if not ca_secret or not ca_bundle.startswith("/opt/dq/source-ca/"):
+            print("  [FAIL] Enabled source store requires a dedicated CA Secret mounted under /opt/dq/source-ca")
+            return False
+        for comp in components:
+            for info in parsed_deps[comp]:
+                if ca_secret not in info["vol_secrets"]:
+                    print(f"  [FAIL] Deployment '{info['name']}' does not mount the dedicated source CA Secret")
+                    return False
+                missing = {"DQ_SOURCE_S3_ACCESS_KEY_ID", "DQ_SOURCE_S3_SECRET_ACCESS_KEY"} - set(info["env_var_to_secret"])
+                if missing:
+                    print(f"  [FAIL] Deployment '{info['name']}' lacks secretKeyRef source credentials: {sorted(missing)}")
+                    return False
+                if ca_secret in info["env_secrets"] | info["env_from_secrets"]:
+                    print(f"  [FAIL] Deployment '{info['name']}' exposes the source CA Secret as environment")
+                    return False
+
     # 3. Derive role secret identities
     # API private TLS secret: mounts tls.key
     api_tls_secrets: set[str] = set()
@@ -546,6 +686,15 @@ def check_spark_security_effective(namespace: str, release: str, kubeconfig: str
         "assert conf.get('spark.driver.port') == '7078', 'spark.driver.port != 7078'\n"
         "assert conf.get('spark.blockManager.port') == '7079', 'spark.blockManager.port != 7079'\n"
         "assert conf.get('spark.kubernetes.executor.label.dq-scoring/protected') == 'true', 'missing protected label'\n"
+        "if os.environ.get('DQ_SOURCE_S3_ENABLED', '').lower() == 'true':\n"
+        "    for name in ('DQ_SOURCE_S3_ACCESS_KEY_ID', 'DQ_SOURCE_S3_SECRET_ACCESS_KEY'):\n"
+        "        assert conf.get('spark.kubernetes.executor.secretKeyRef.' + name), 'missing executor source secretKeyRef'\n"
+        "        assert 'spark.executorEnv.' + name not in conf, 'cleartext source credential in executor env'\n"
+        "    ca = os.environ.get('DQ_SOURCE_S3_CA_BUNDLE', '')\n"
+        "    assert ca.startswith('/opt/dq/source-ca/') and os.path.isfile(ca), 'dedicated source CA missing'\n"
+        "    assert conf.get('spark.executorEnv.DQ_SOURCE_S3_CA_BUNDLE') == ca, 'executor source CA env missing'\n"
+        "    ca_secret = os.environ.get('DQ_SOURCE_S3_CA_SECRET', '')\n"
+        "    assert ca_secret and conf.get('spark.kubernetes.executor.secrets.' + ca_secret) == os.path.dirname(ca), 'executor source CA Secret mount missing or mismatched'\n"
         "print('SPARK_CONFIGURED_VERIFIED')\n"
         "validate_protected_runtime('worker')\n"
         "sec_dir = os.environ.get('DQ_SECURITY_DIR', '/opt/dq/security')\n"
@@ -651,6 +800,13 @@ print('TLS_VERIFIED')
         if code != 0 or result != "TLS_VERIFIED":
             print(f"  [FAIL] Verified PostgreSQL/S3 TLS connection failed for {container}")
             return False
+
+    source_cm = _source_config(namespace, release, kubeconfig)
+    if source_cm is None:
+        print('  [FAIL] Source configuration cannot be inspected')
+        return False
+    if source_cm and not _check_source_tls(namespace, source_cm, pod_worker, pod_probe, kubeconfig):
+        return False
 
     # Resolve a live canary outside the restricted workloads. NXDOMAIN/refused is not proof.
     try:

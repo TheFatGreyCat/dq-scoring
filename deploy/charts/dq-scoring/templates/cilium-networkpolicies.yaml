@@ -6,6 +6,10 @@
 {{- $s3Svc := $p.allowedServices.minio -}}
 {{- $pgFqdn := include "dq-scoring.svcFqdn" (dict "svc" $pgSvc "cd" $cd) -}}
 {{- $s3Fqdn := include "dq-scoring.svcFqdn" (dict "svc" $s3Svc "cd" $cd) -}}
+{{- $src := .Values.sourceStore -}}
+{{- $srcSvc := $src.allowedService -}}
+{{- $srcOn := and $src.enabled (not (and (eq $srcSvc.name $s3Svc.name) (eq $srcSvc.namespace $s3Svc.namespace) (eq (int $srcSvc.port) (int $s3Svc.port)))) -}}
+{{- $srcNames := list $srcSvc.name (printf "%s.%s" $srcSvc.name $srcSvc.namespace) (printf "%s.%s.svc" $srcSvc.name $srcSvc.namespace) (include "dq-scoring.svcFqdn" (dict "svc" $srcSvc "cd" $cd)) -}}
 {{- $k8sFqdn := printf "kubernetes.default.svc.%s" $cd -}}
 {{- $pgNames := list $pgSvc.name (printf "%s.%s" $pgSvc.name $pgSvc.namespace) (printf "%s.%s.svc" $pgSvc.name $pgSvc.namespace) $pgFqdn -}}
 {{- $s3Names := list $s3Svc.name (printf "%s.%s" $s3Svc.name $s3Svc.namespace) (printf "%s.%s.svc" $s3Svc.name $s3Svc.namespace) $s3Fqdn -}}
@@ -52,9 +56,12 @@ spec:
             - port: {{ .Values.api.port | quote }}
               protocol: TCP
   egress:
-    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names)) | nindent 4 }}
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names (ternary $srcNames (list) $srcOn))) | nindent 4 }}
     {{- include "dq-scoring.cnpService" (dict "svc" $pgSvc) | nindent 4 }}
     {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+    {{- if $srcOn }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $srcSvc) | nindent 4 }}
+    {{- end }}
 {{- if .Values.ui.enabled }}
 ---
 apiVersion: cilium.io/v2
@@ -99,9 +106,12 @@ spec:
       app.kubernetes.io/component: import
   ingress: []
   egress:
-    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names)) | nindent 4 }}
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names (ternary $srcNames (list) $srcOn))) | nindent 4 }}
     {{- include "dq-scoring.cnpService" (dict "svc" $pgSvc) | nindent 4 }}
     {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+    {{- if $srcOn }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $srcSvc) | nindent 4 }}
+    {{- end }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -127,9 +137,12 @@ spec:
             - port: "7079"
               protocol: TCP
   egress:
-    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names $k8sNames)) | nindent 4 }}
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $pgNames $s3Names $k8sNames (ternary $srcNames (list) $srcOn))) | nindent 4 }}
     {{- include "dq-scoring.cnpService" (dict "svc" $pgSvc) | nindent 4 }}
     {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+    {{- if $srcOn }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $srcSvc) | nindent 4 }}
+    {{- end }}
     - toCIDRSet:
         {{- range $p.kubernetesApiCIDRs }}
         - cidr: {{ . | quote }}
@@ -186,8 +199,11 @@ spec:
             - port: "7079"
               protocol: TCP
   egress:
-    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" $s3Names) | nindent 4 }}
+    {{- include "dq-scoring.cnpDns" (dict "p" $p "ns" $ns "names" (concat $s3Names (ternary $srcNames (list) $srcOn))) | nindent 4 }}
     {{- include "dq-scoring.cnpService" (dict "svc" $s3Svc) | nindent 4 }}
+    {{- if $srcOn }}
+    {{- include "dq-scoring.cnpService" (dict "svc" $srcSvc) | nindent 4 }}
+    {{- end }}
     - toEndpoints:
         - matchLabels:
             app.kubernetes.io/instance: {{ .Release.Name }}

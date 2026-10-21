@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -12,6 +13,13 @@ from psycopg.types.json import Jsonb
 
 class PostgresImportStore:
     """Manages dataset_upload_sessions persistence in PostgreSQL."""
+
+    @staticmethod
+    def lock_tenant_storage(conn: psycopg.Connection, tenant_id: UUID, *, exclusive: bool = False) -> None:
+        """Transaction-scoped tenant storage lock: shared for mutators, exclusive for orphan pruning."""
+        key = int.from_bytes(hashlib.sha256(f"dq-storage-v2:{tenant_id}".encode()).digest()[:8], "big", signed=True)
+        fn = "pg_advisory_xact_lock" if exclusive else "pg_advisory_xact_lock_shared"
+        conn.execute(f"SELECT {fn}(%s)", (key,))
 
     @staticmethod
     def _hash_advisory_lock(upload_id: UUID, part_number: int) -> int:

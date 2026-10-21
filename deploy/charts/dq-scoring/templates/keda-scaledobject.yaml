@@ -25,7 +25,7 @@ spec:
         connectionFromEnv: DQ_WORKER_POSTGRES_DSN
         targetQueryValue: {{ $laneConfig.keda.targetQueueValue | quote }}
         {{- if eq $laneName "fast" }}
-        query: "SELECT count(*) FROM evaluation_runs WHERE run_status = 'QUEUED' AND (workload_tier = 'SMALL' OR workload_tier IS NULL) AND trigger_type != 'SCHEDULED';"
+        query: "SELECT (SELECT count(*) FROM evaluation_runs WHERE run_status = 'QUEUED' AND (workload_tier = 'SMALL' OR workload_tier IS NULL) AND trigger_type != 'SCHEDULED') + (SELECT count(*) FROM snapshot_profile_jobs WHERE state='QUEUED' OR (state='RUNNING' AND lease_expires_at < clock_timestamp()));"
         {{- else if eq $laneName "heavy" }}
         query: "SELECT count(*) FROM evaluation_runs WHERE run_status = 'QUEUED' AND workload_tier = 'LARGE' AND trigger_type != 'SCHEDULED';"
         {{- else }}

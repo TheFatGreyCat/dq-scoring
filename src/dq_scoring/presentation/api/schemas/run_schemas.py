@@ -17,6 +17,7 @@ class TriggerRunRequest(BaseModel):
     execution_profile: str = "standard"
     outlier_columns: list[str] = Field(default_factory=list)
     idempotency_key: str | None = None
+    reuse_completed: bool = True
 
 
 def safe_run_error(value: str | None) -> str | None:

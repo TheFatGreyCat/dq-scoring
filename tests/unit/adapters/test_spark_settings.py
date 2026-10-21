@@ -164,3 +164,114 @@ def test_protected_executor_uses_operator_secret(monkeypatch: pytest.MonkeyPatch
     conf = SparkSettings(master=K8S_MASTER, driver_host="worker").to_spark_conf()
     assert conf["spark.kubernetes.executor.secrets.synthetic-spark-tls"] == "/opt/dq/security"
     assert "spark.kubernetes.executor.secrets.spark-security" not in conf
+
+
+_OWNED_ENV = {
+    "DQ_S3_ENDPOINT_URL": "https://minio.synthetic.svc:9000",
+    "DQ_S3_REGION": "synthetic-1",
+    "DQ_S3_BUCKET_SNAPSHOTS": "synthetic-snapshots",
+}
+_SOURCE_ENV = {
+    "DQ_SOURCE_S3_ENABLED": "true",
+    "DQ_SOURCE_S3_ENDPOINT_URL": "https://source.synthetic.svc:443",
+    "DQ_SOURCE_S3_ACCESS_KEY_ID": "synthetic-source-id",
+    "DQ_SOURCE_S3_SECRET_ACCESS_KEY": "synthetic-source-secret",
+    "DQ_SOURCE_S3_BUCKET": "synthetic-source",
+    "DQ_SOURCE_S3_TENANT_PREFIXES": '{"00000000-0000-0000-0000-000000000001": ["shared/a/"]}',
+    "DQ_SOURCE_S3_EXECUTOR_SECRET": "synthetic-source-creds",
+    "DQ_SOURCE_S3_USE_SSL": "true",
+}
+
+
+def _k8s_conf(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> dict[str, str]:
+    for key, value in {**_OWNED_ENV, **env}.items():
+        monkeypatch.setenv(key, value)
+    return SparkSettings(master=K8S_MASTER, driver_host="10.42.0.7").to_spark_conf()
+
+
+def test_k8s_executors_get_owned_credentials_only_by_secret_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    conf = _k8s_conf(monkeypatch, {})
+
+    assert conf["spark.kubernetes.executor.secretKeyRef.DQ_S3_ACCESS_KEY_ID"] == "dq-minio-secret:access_key"
+    assert conf["spark.kubernetes.executor.secretKeyRef.DQ_S3_SECRET_ACCESS_KEY"] == "dq-minio-secret:secret_key"
+    assert conf["spark.executorEnv.DQ_S3_ENDPOINT_URL"] == _OWNED_ENV["DQ_S3_ENDPOINT_URL"]
+    assert conf["spark.executorEnv.DQ_S3_BUCKET_SNAPSHOTS"] == "synthetic-snapshots"
+    assert not any(k.startswith("spark.executorEnv.DQ_SOURCE_S3_") for k in conf)
+
+
+def test_k8s_object_store_secret_names_are_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DQ_SPARK_OBJECT_STORE_SECRET", "synthetic-owned")
+    monkeypatch.setenv("DQ_SPARK_OBJECT_STORE_ACCESS_KEY_ID_KEY", "id")
+    monkeypatch.setenv("DQ_SPARK_OBJECT_STORE_SECRET_ACCESS_KEY_KEY", "key")
+
+    conf = SparkSettings(master=K8S_MASTER, driver_host="h").to_spark_conf()
+
+    assert conf["spark.kubernetes.executor.secretKeyRef.DQ_S3_ACCESS_KEY_ID"] == "synthetic-owned:id"
+    assert conf["spark.kubernetes.executor.secretKeyRef.DQ_S3_SECRET_ACCESS_KEY"] == "synthetic-owned:key"
+
+
+def test_k8s_enabled_source_propagates_nonsecret_config_and_ca_never_cleartext(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    ca = tmp_path / "source-s3-ca.pem"
+    ca.write_text("synthetic")
+    conf = _k8s_conf(
+        monkeypatch,
+        {**_SOURCE_ENV, "DQ_SOURCE_S3_CA_BUNDLE": str(ca), "DQ_SOURCE_S3_CA_SECRET": "synthetic-source-ca"},
+    )
+
+    assert conf["spark.kubernetes.executor.secretKeyRef.DQ_SOURCE_S3_ACCESS_KEY_ID"] == "synthetic-source-creds:access_key"
+    assert conf["spark.kubernetes.executor.secretKeyRef.DQ_SOURCE_S3_SECRET_ACCESS_KEY"] == "synthetic-source-creds:secret_key"
+    assert conf["spark.kubernetes.executor.secrets.synthetic-source-ca"] == str(tmp_path)
+    assert conf["spark.executorEnv.DQ_SOURCE_S3_BUCKET"] == "synthetic-source"
+    assert conf["spark.executorEnv.DQ_SOURCE_S3_CA_BUNDLE"] == str(ca)
+    assert conf["spark.executorEnv.DQ_SOURCE_S3_TENANT_PREFIXES"] == _SOURCE_ENV["DQ_SOURCE_S3_TENANT_PREFIXES"]
+    assert not any(k.startswith("spark.executorEnv.") and "ACCESS_KEY" in k for k in conf)
+    assert "synthetic-source-secret" not in "".join(conf.values())
+    assert "synthetic-source-id" not in "".join(conf.values())
+
+
+def test_k8s_enabled_source_without_executor_secret_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = {k: v for k, v in _SOURCE_ENV.items() if k != "DQ_SOURCE_S3_EXECUTOR_SECRET"}
+
+    with pytest.raises(ValueError, match="DQ_SOURCE_S3_EXECUTOR_SECRET"):
+        _k8s_conf(monkeypatch, env)
+
+
+def test_k8s_source_ca_secret_requires_bundle_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="DQ_SOURCE_S3_CA_BUNDLE"):
+        _k8s_conf(monkeypatch, {**_SOURCE_ENV, "DQ_SOURCE_S3_CA_SECRET": "synthetic-source-ca"})
+
+
+
+
+def test_protected_enabled_source_with_missing_ca_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("DQ_PROTECTED_PROCESSING_ENABLED", "true")
+
+    with pytest.raises(ValueError, match="CA bundle"):
+        _k8s_conf(
+            monkeypatch,
+            {
+                **_SOURCE_ENV,
+                "DQ_SOURCE_S3_CA_BUNDLE": str(tmp_path / "absent.pem"),
+                "DQ_SOURCE_S3_CA_SECRET": "synthetic-source-ca",
+            },
+        )
+
+
+def test_k8s_owned_ca_without_protected_mount_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="DQ_S3_CA_BUNDLE"):
+        _k8s_conf(monkeypatch, {"DQ_S3_CA_BUNDLE": "/opt/dq/owned-ca/s3-ca.pem"})
+
+
+def test_protected_owned_ca_outside_security_secret_dir_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DQ_PROTECTED_PROCESSING_ENABLED", "true")
+    with pytest.raises(ValueError, match="DQ_S3_CA_BUNDLE"):
+        _k8s_conf(monkeypatch, {"DQ_S3_CA_BUNDLE": "/opt/dq/owned-ca/s3-ca.pem"})
+
+
+def test_protected_owned_ca_in_security_secret_dir_propagates_with_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DQ_PROTECTED_PROCESSING_ENABLED", "true")
+    conf = _k8s_conf(monkeypatch, {"DQ_S3_CA_BUNDLE": "/opt/dq/security/s3-ca.pem"})
+    assert conf["spark.executorEnv.DQ_S3_CA_BUNDLE"] == "/opt/dq/security/s3-ca.pem"
+    assert conf["spark.kubernetes.executor.secrets.spark-security"] == "/opt/dq/security"

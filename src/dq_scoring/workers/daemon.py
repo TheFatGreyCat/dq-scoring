@@ -13,6 +13,7 @@ from dq_scoring.adapters.compute.spark_compute import PySparkComputeAdapter
 from dq_scoring.adapters.db.postgres_assessment_store import (
     PostgresAssessmentStoreAdapter,
 )
+from dq_scoring.adapters.queue.postgres_profile_queue import PostgresProfileQueue
 from dq_scoring.adapters.queue.postgres_queue import PostgresQueueAdapter
 from dq_scoring.common.protected_transport import (
     ProtectedTransportError,
@@ -26,6 +27,10 @@ from dq_scoring.workers.monitoring import (
     WorkerMonitor,
     infrastructure_error_code,
     spark_metrics,
+)
+from dq_scoring.workers.snapshot_profile_worker import (
+    FairProfileScheduler,
+    SnapshotProfileWorker,
 )
 
 logging.basicConfig(
@@ -83,23 +88,20 @@ def run_daemon() -> None:
             on_queue_available=monitor.queue_available,
             observer=RunSparkObserver(compute, queue),
         )
+        profiles = SnapshotProfileWorker(PostgresProfileQueue(dsn, worker_id), compute, heartbeat_interval, monitor) if os.getenv("DQ_WORKER_LANE", "fast") == "fast" else None
+        scheduler = FairProfileScheduler(worker, profiles)
 
         def _signal_handler(signum: int, _frame: object) -> None:
             logger.info("Received termination signal %s", signum)
             worker.stop()
+            if profiles:
+                profiles.stop()
 
         signal.signal(signal.SIGINT, _signal_handler)
         signal.signal(signal.SIGTERM, _signal_handler)
         while not worker._stop_event.is_set():
             try:
-                assessment = worker.run_once()
-                if assessment:
-                    logger.info(
-                        "Successfully processed run %s -> Assessment %s",
-                        assessment.run_id,
-                        assessment.assessment_id,
-                    )
-                else:
+                if not scheduler.run_once():
                     time.sleep(poll_interval)
             except Exception as error:  # noqa: BLE001
                 code = infrastructure_error_code(error)

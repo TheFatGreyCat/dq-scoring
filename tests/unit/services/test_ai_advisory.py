@@ -10,7 +10,7 @@ from dq_scoring.services.assessment_report_service import _validate
 
 def context():
     profile = {'sample_rows': 3, 'columns': [{'name': 'private@example.test', 'type_hint': 'STRING', 'sample_rows': 3, 'null_count': 1, 'non_null_count': 2, 'distinct_count': 2, 'parse_success_count': 2, 'min': 'secret'}]}
-    ctx, tokens = build_recommendation_context({'columns': ['private@example.test']}, profile, frozenset(), 3, 50)
+    ctx, tokens = build_recommendation_context({'columns': ['private@example.test']}, profile, frozenset(), 3, 50, {'private@example.test': 'IDENTIFIER'})
     return ctx, tokens, profile
 
 
@@ -24,7 +24,7 @@ def test_external_context_excludes_dataset_strings_and_extrema():
 
 def test_protected_columns_never_enter_external_context():
     _, _, profile = context()
-    ctx, tokens = build_recommendation_context({'columns': ['private@example.test']}, profile, frozenset({'private@example.test'}), 3, 50)
+    ctx, tokens = build_recommendation_context({'columns': ['private@example.test']}, profile, frozenset({'private@example.test'}), 3, 50, {'private@example.test': 'IDENTIFIER'})
     assert ctx is None and tokens == {}
 
 

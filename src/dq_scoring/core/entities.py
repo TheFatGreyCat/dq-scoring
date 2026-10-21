@@ -93,6 +93,8 @@ class RunSpec(BaseModel):
     ruleset_id: UUID | None = None
     policy_id: UUID | None = None
     created_by: UUID | None = None
+    profile_id: UUID | None = None
+    profile_fingerprint: str | None = None
 
 
 class LeasedRun(BaseModel):
@@ -127,14 +129,6 @@ class ImmutableAssessment(BaseModel):
     confidence_status: str = "NOT_APPLICABLE"
 
 
-class CanonicalMetric(BaseModel):
-    """Single-pass canonical statistical metric."""
-
-    model_config = ConfigDict(frozen=True)
-
-    metric_name: str
-    column_name: str
-    metric_value: float | int | str | None = None
 
 
 class RuleExecutionOutput(BaseModel):

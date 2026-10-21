@@ -15,6 +15,11 @@ from psycopg.types.json import Jsonb
 
 from dq_scoring.adapters.db.policy_mapping import scoring_policy_from_row
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
+from dq_scoring.common.evaluation_identity import (
+    canonical_execution_profile,
+    evaluation_fingerprint,
+    saved_request_matches,
+)
 from dq_scoring.common.protected_transport import protected_connect
 from dq_scoring.core.entities import (
     DatasetSnapshot,
@@ -23,7 +28,9 @@ from dq_scoring.core.entities import (
     RunSpec,
     RunStatus,
 )
+from dq_scoring.core.exceptions import IdempotencyConflictError
 from dq_scoring.ports.queue_port import IQueuePort
+from dq_scoring.services.evaluation_reuse import pin_full_profile
 
 MAX_OBSERVATIONS_PER_ATTEMPT = 500
 
@@ -54,6 +61,26 @@ class PostgresQueueAdapter(IQueuePort):
             with protected_connect(self._dsn) as conn:
                 yield conn
 
+    @staticmethod
+    def _authorized_existing(cur: psycopg.Cursor, spec: RunSpec, idempotency_key: str) -> UUID | None:
+        """Existing run for the key, only if it belongs to the same owner and request; otherwise conflict."""
+        cur.execute(
+            """
+            SELECT run_id, created_by, snapshot_id, ruleset_id, policy_id, execution_profile, outlier_config
+            FROM evaluation_runs WHERE tenant_id = %s AND idempotency_key = %s;
+            """,
+            (spec.tenant_id, idempotency_key),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if row[1] != spec.created_by or not saved_request_matches(
+            snapshot_id=row[2], ruleset_id=row[3], policy_id=row[4],
+            execution_profile=row[5], outlier_config=row[6], requested=spec,
+        ):
+            raise IdempotencyConflictError()
+        return row[0]
+
     def enqueue_run(self, spec: RunSpec, idempotency_key: str) -> UUID:
         """Enqueue run idempotently, returning existing run_id if previously seen."""
         if spec.ruleset_id is None or spec.policy_id is None or spec.created_by is None:
@@ -63,16 +90,10 @@ class PostgresQueueAdapter(IQueuePort):
         with self._get_connection() as conn, conn.transaction():
             set_tenant_context(conn, spec.tenant_id)
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT run_id FROM evaluation_runs
-                    WHERE tenant_id = %s AND idempotency_key = %s;
-                    """,
-                    (spec.tenant_id, idempotency_key),
-                )
-                existing = cur.fetchone()
+                existing = self._authorized_existing(cur, spec, idempotency_key)
                 if existing:
-                    return existing[0]
+                    return existing
+                spec = pin_full_profile(conn, spec)
 
                 outlier_payload: dict[str, Any] = {
                     "outlier_columns": spec.outlier_columns,
@@ -92,13 +113,13 @@ class PostgresQueueAdapter(IQueuePort):
                         workload_tier, trigger_type, execution_profile,
                         outlier_config, outlier_config_hash, priority,
                         run_status, attempt_count, lease_generation,
-                        idempotency_key, created_by, created_at
+                        idempotency_key, created_by, created_at, evaluation_fingerprint
                     ) VALUES (
                         %s, %s, %s, %s, %s,
                         'SMALL', 'ON_DEMAND', %s,
                         %s, %s, 5,
                         'QUEUED', 0, 0,
-                        %s, %s, now()
+                        %s, %s, now(), %s
                     )
                     ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
                     RETURNING run_id;
@@ -109,22 +130,19 @@ class PostgresQueueAdapter(IQueuePort):
                         spec.snapshot.snapshot_id,
                         spec.ruleset_id,
                         spec.policy_id,
-                        "SPARK_K3S"
-                        if (spec.execution_profile or "").upper()
-                        in ("SPARK_K3S", "STANDARD")
-                        else (spec.execution_profile or "SPARK_K3S"),
+                        canonical_execution_profile(spec.execution_profile),
                         Jsonb(outlier_payload),
                         outlier_hash,
                         idempotency_key,
                         spec.created_by,
+                        evaluation_fingerprint(spec, profile_fingerprint=spec.profile_fingerprint),
                     ),
                 )
                 if cur.fetchone() is None:
-                    cur.execute(
-                        "SELECT run_id FROM evaluation_runs WHERE tenant_id = %s AND idempotency_key = %s;",
-                        (spec.tenant_id, idempotency_key),
-                    )
-                    return cur.fetchone()[0]
+                    winner = self._authorized_existing(cur, spec, idempotency_key)
+                    if winner is None:
+                        raise IdempotencyConflictError()
+                    return winner
 
                 cur.execute(
                     """

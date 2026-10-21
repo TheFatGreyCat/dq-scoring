@@ -48,6 +48,16 @@ Các nguyên tắc chấm điểm:
 - Nhập CSV UTF-8, Parquet và JSONL; kiểm tra cấu trúc, xem mẫu, xác nhận đăng ký snapshot.
 - Runtime đánh giá sử dụng snapshot `OBJECT_FILE` với descriptor canonical và phiên bản object được ghim.
 - JSONL có một root object mỗi dòng; object/array trong cột được giữ dưới dạng JSON cell, không tự tách thành nhiều dòng.
+- Migration `022` lưu FULL profile jobs riêng với manifest bất biến; cả đăng ký mới, đăng ký lại và raw-content duplicate đều ensure một job theo fingerprint trong transaction đăng ký.
+- Fingerprint ghim snapshot/schema, canonical object version/SHA-256, normalization và profiler version; không ghim privacy labels. COMPLETE bất biến; FAILED chỉ requeue bằng thao tác explicit. Runtime app không được publish result/lease; worker publication cần owner, generation và lease còn hạn.
+- Migration chỉ enqueue existing canonical snapshots, không scan; down migration khóa bảng và từ chối nếu còn bất kỳ job/evidence nào. Không rollback bằng cách xóa evidence.
+
+Databases that applied the pre-release migration 023: run `uv run python -m dq_scoring.presentation.cli.repair_semantic_schema` (dry-run) with `DQ_ADMIN_POSTGRES_DSN` set; `--apply` rebuilds the semantic schema only if all three semantic tables are empty, otherwise aborts with `SEMANTIC_EVIDENCE_NOT_EMPTY` and requires manual review.
+
+- Fast evaluation daemon dùng chung SparkSession để xử lý FULL/evaluation tuần tự, luân phiên khi cả hai queue có demand; heavy/scheduled lane không claim FULL. KEDA fast đếm cả FULL queued và lease hết hạn.
+- FULL đếm exact trên toàn bộ root columns, missing theo compiler (null hoặc chuỗi trắng), distinct chỉ non-missing; aggregate chia batch 32 cột nên wide schema có nhiều Spark actions/I/O/shuffle. Không dùng prefix type hint làm parse target; thiếu explicit target trả unknown, không giả parse thành công.
+- `GET /api/v1/snapshots/{id}/profile?mode=SAMPLE|FULL` chỉ đọc; SAMPLE là prefix tối đa 1.000 dòng/16 MiB, không phải random sample. `POST /api/v1/snapshots/{id}/profiles/full` ensure/requeue FAILED hiện tại, cần membership write còn active; GET không enqueue hoặc inference.
+- New evaluation cần FULL COMPLETE đúng fingerprint tại queue boundary; thiếu/pending/failed trả `409 FULL_PROFILE_REQUIRED` với job reference, không có bypass flag. RunSpec ghim profile ID/fingerprint; retry idempotency key cũ và đọc lịch sử không bị gate version mới. Recommendation chọn profile mode độc lập, không thay evaluation gate.
 
 ### Đánh giá chất lượng
 

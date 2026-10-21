@@ -85,3 +85,29 @@ def spool_canonical(store: IObjectStorePort, tenant_id: UUID, source_descriptor:
     except BaseException:
         dest.unlink(missing_ok=True)
         raise
+
+
+def verify_pinned_object(store: IObjectStorePort, ref: ObjectRef, descriptor: dict[str, Any], *, full: bool) -> None:
+    """Verify the historical version, never the current key's latest version."""
+    def check() -> None:
+        meta = store.head(ref)
+        if meta.version_id != ref.version_id or meta.size_bytes != descriptor['size_bytes']:
+            raise SnapshotObjectError('OBJECT_CHANGED', 'Pinned object metadata mismatch.')
+        if descriptor.get('etag') and meta.etag.strip('"') != descriptor['etag'].strip('"'):
+            raise SnapshotObjectError('OBJECT_CHANGED', 'Pinned object ETag mismatch.')
+
+    try:
+        check()
+        if full:
+            digest, size = hashlib.sha256(), 0
+            with store.open_stream(ref) as stream:
+                for chunk in iter(lambda: stream.read(CHUNK_BYTES), b''):
+                    digest.update(chunk)
+                    size += len(chunk)
+            if size != descriptor['size_bytes'] or digest.hexdigest() != descriptor['content_sha256']:
+                raise SnapshotObjectError('OBJECT_CHANGED', 'Pinned object checksum mismatch.')
+            check()
+    except FileNotFoundError as exc:
+        raise SnapshotObjectError('RESOURCE_NOT_FOUND', 'Pinned object is missing.') from exc
+    except (BotoCoreError, ClientError, OSError) as exc:
+        raise SnapshotObjectError('STORAGE_UNAVAILABLE', 'Pinned storage cannot be verified.') from exc

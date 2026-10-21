@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import type { ComponentProps } from "react";
 import type { ColumnClassification, DatasetPreview, DatasetProfile, SnapshotResponse } from "../../api/types";
 import { I18nProvider } from "../../lib/i18n";
@@ -81,19 +82,81 @@ const CLASSIFICATIONS: ColumnClassification[] = [
   },
 ];
 
+let fetchMock: Mock;
+beforeEach(() => {
+  localStorage.setItem("dq_language", "en");
+  fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+});
+afterEach(() => vi.unstubAllGlobals());
+
+const jsonResponse = (status: number, body: unknown) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
 function renderPanel(props: Partial<ComponentProps<typeof ProfilingPanel>> = {}) {
   render(
-    <I18nProvider>
-      <ProfilingPanel
-        snapshot={SNAPSHOT}
-        previewData={PREVIEW_DATA}
-        classifications={CLASSIFICATIONS}
-        {...props}
-      />
-    </I18nProvider>
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <I18nProvider>
+        <ProfilingPanel
+          snapshot={SNAPSHOT}
+          previewData={PREVIEW_DATA}
+          classifications={CLASSIFICATIONS}
+          {...props}
+        />
+      </I18nProvider>
+    </QueryClientProvider>
   );
   fireEvent.click(screen.getByRole("tab", { name: /column profile|hồ sơ cột/i }));
 }
+
+const FULL_RESULT = {
+  mode: "FULL",
+  total_rows: 500,
+  scanned_rows: 500,
+  generated_at: "2026-03-01T12:00:00Z",
+  columns: [
+    { name: "salary", technical_type: "NUMERIC", null_count: null, non_null_count: null, distinct_count: null, parse_success_count: null },
+    { name: "item_count", technical_type: "INTEGER", null_count: 10, non_null_count: 490, distinct_count: 7, parse_success_count: 490 },
+  ],
+};
+
+it("never enqueues or fetches FULL until FULL is chosen, and POSTs only on explicit click", async () => {
+  fetchMock.mockImplementation(async (_url: string, init?: RequestInit) =>
+    init?.method === "POST"
+      ? jsonResponse(202, { profile_id: "p", snapshot_id: SNAPSHOT.snapshot_id, state: "QUEUED", fingerprint: "f", profiler_version: "1" })
+      : jsonResponse(200, { state: null, current: false, stale: false, result: null }),
+  );
+  renderPanel();
+  expect(fetchMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("radio", { name: /full scan/i }));
+  const button = await screen.findByRole("button", { name: /run full profile/i });
+  expect(fetchMock.mock.calls.every(([, init]) => init?.method !== "POST")).toBe(true);
+  fireEvent.click(button);
+  await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+});
+
+it("shows unknown FULL counts as unavailable rather than 0 and a FAILED error code", async () => {
+  fetchMock.mockResolvedValue(
+    jsonResponse(200, { state: "FAILED", current: true, stale: false, error_code: "SPARK_TIMEOUT", result: FULL_RESULT }),
+  );
+  renderPanel();
+  fireEvent.click(screen.getByRole("radio", { name: /full scan/i }));
+  expect(await screen.findByText("SPARK_TIMEOUT")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /run full profile/i })).toBeInTheDocument();
+  const cells = within(screen.getByRole("button", { name: "salary" }).closest("tr")!).getAllByRole("cell");
+  expect(cells[2]).toHaveTextContent("—");
+  expect(cells[4]).toHaveTextContent("—");
+});
+
+it("marks an old-fingerprint COMPLETE profile stale and offers no re-run", async () => {
+  fetchMock.mockResolvedValue(
+    jsonResponse(200, { state: "COMPLETE", current: false, stale: true, result: FULL_RESULT }),
+  );
+  renderPanel();
+  fireEvent.click(screen.getByRole("radio", { name: /full scan/i }));
+  expect(await screen.findByText("Stale")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /run full profile/i })).not.toBeInTheDocument();
+});
 
 const expandAll = () =>
   screen.getAllByRole("button", { expanded: false }).forEach((b) => fireEvent.click(b));

@@ -107,7 +107,7 @@ def test_four_eyes_governance_and_draft_rejection(client: TestClient, db_conn):
     asset_id = asset_resp.json()["asset_id"]
 
     from tests.support.object_snapshots import register_snapshot_via_api
-    snap = register_snapshot_via_api(client, creator_hdr, content_or_path=b"id,fare,trip_distance\n1,12,3\n", asset_id=asset_id)
+    snap = register_snapshot_via_api(client, creator_hdr, content_or_path=b"id,fare,trip_distance\n1,12,3\n", asset_id=asset_id, process_full_profile=True)
     snap_id = snap["snapshot_id"]
 
     # 3. Creator creates DRAFT ruleset

@@ -23,6 +23,10 @@ def enabled(client):
 def snapshot(db_conn, org):  # noqa: F811
     profile = {'sample_rows': 10, 'is_sample': True, 'columns': [{'name': 'id', 'sample_rows': 10, 'type_hint': 'STRING', 'null_count': 0, 'non_null_count': 10, 'distinct_count': 10, 'parse_success_count': 10}]}
     asset, snap, _ = _seed_asset_and_snapshot(db_conn, org['tenant_id'], org['owner'][0], preview=[{'id':'synthetic','email':'[REDACTED]'}], profile=profile)
+    db_conn.execute("INSERT INTO snapshot_semantic_state(tenant_id,snapshot_id) VALUES(%s,%s)", (org['tenant_id'], snap))
+    db_conn.execute("UPDATE snapshot_semantic_state SET revision=1 WHERE snapshot_id=%s", (snap,))
+    db_conn.execute("INSERT INTO snapshot_column_semantics(tenant_id,snapshot_id,column_name,label,revision,updated_by,reason) VALUES(%s,%s,'id','IDENTIFIER',1,%s,'synthetic')", (org['tenant_id'], snap, org['owner'][0]))
+    db_conn.execute("INSERT INTO snapshot_column_semantic_history(tenant_id,snapshot_id,revision,column_name,action,label,actor_user_id,reason) VALUES(%s,%s,1,'id','CONFIRM','IDENTIFIER',%s,'synthetic')", (org['tenant_id'], snap, org['owner'][0]))
     db_conn.commit()
     return asset, snap
 
@@ -42,6 +46,18 @@ def test_advisory_disabled_does_not_break_heuristic(client, org, snapshot):  # n
     client.app.dependency_overrides.pop(get_llm_settings)
 
 
+def test_unconfirmed_columns_never_reach_gateway(client, org, snapshot, enabled, monkeypatch, db_conn):  # noqa: F811
+    from dq_scoring.services import ai_recommendation_service as service
+    async def forbidden(*args):
+        pytest.fail('unconfirmed column reached gateway')
+    monkeypatch.setattr(service, 'request_candidates', forbidden)
+    db_conn.execute("SET session_replication_role = replica")
+    db_conn.execute("DELETE FROM snapshot_column_semantics WHERE snapshot_id=%s", (snapshot[1],))
+    db_conn.commit()
+    response = request(client, org, snapshot[1])
+    assert response.status_code == 422 and response.json()['detail'] == 'AI_NO_ELIGIBLE_COLUMNS'
+
+
 def test_advisory_validates_local_mapping_and_hybrid_fallback(client, org, snapshot, enabled, monkeypatch):  # noqa: F811
     from dq_scoring.services import ai_recommendation_service as service
     async def reply(settings, context):
@@ -50,6 +66,10 @@ def test_advisory_validates_local_mapping_and_hybrid_fallback(client, org, snaps
     monkeypatch.setattr(service, 'request_candidates', reply)
     response = request(client, org, snapshot[1])
     assert response.status_code == 200, response.text
+    prov = response.json()['provenance']
+    assert prov['provider'] == 'API' and prov['vocabulary_version'] == 'dq-semantic-v1'
+    assert isinstance(prov['semantic_revision'], int) and isinstance(prov['privacy_policy_version'], int)
+    assert 'profiler_version' in prov['profile']
     rule = response.json()['rules'][0]['rule']
     assert rule['parameters'] == {'column':'id'}
     assert rule['is_required'] is False and rule['is_critical'] is False
@@ -90,6 +110,58 @@ def test_policy_change_during_inference_discards_result(client, org, snapshot, e
     monkeypatch.setattr(service, 'request_candidates', changed)
     response = request(client, org, snapshot[1])
     assert response.status_code == 409, response.text
+
+
+@pytest.mark.parametrize("field", ["profile_id", "fingerprint"])
+def test_full_profile_identity_change_during_inference_is_stale(client, org, snapshot, enabled, monkeypatch, field):  # noqa: F811
+    from dq_scoring.presentation.api.routes import asset_routes
+    from dq_scoring.services import ai_recommendation_service as service
+
+    original = asset_routes._heuristic
+    loads = 0
+    calls = []
+    identity = {"profile_id": str(uuid4()), "fingerprint": "a" * 64}
+    replacement = str(uuid4()) if field == "profile_id" else "f" * 64
+
+    def changed(*args):
+        nonlocal loads
+        data, rules = original(*args)
+        loads += 1
+        profile = {**data["profile"], "mode": "FULL", "is_sample": False, **identity}
+        if loads > 1:
+            profile[field] = replacement
+        return {**data, "profile": profile}, rules
+
+    async def reply(*args):
+        calls.append(True)
+        return GatewayReply('{"candidates":[]}', 'synthetic-pinned'), ''
+
+    monkeypatch.setattr(asset_routes, '_heuristic', changed)
+    monkeypatch.setattr(service, 'request_candidates', reply)
+    response = request(client, org, snapshot[1])
+    assert response.status_code == 409, response.text
+    assert response.json()['detail'] == 'AI_CONTEXT_STALE'
+    assert calls == [True]
+
+
+def test_no_database_transaction_is_held_during_gateway_await(client, org, snapshot, enabled, monkeypatch, db_conn):  # noqa: F811
+    from dq_scoring.services import ai_recommendation_service as service
+
+    counts = []
+
+    async def reply(*args):
+        counts.append(db_conn.execute(
+            "SELECT count(*) FROM pg_stat_activity WHERE pg_has_role(usename, 'dq_app_role', 'member') "
+            "AND datname=current_database() AND state IN ('idle in transaction','idle in transaction (aborted)')"
+        ).fetchone()[0])
+        db_conn.rollback()
+        return GatewayReply('{"candidates":[]}', 'synthetic-pinned'), ''
+
+    monkeypatch.setattr(service, 'request_candidates', reply)
+    response = request(client, org, snapshot[1])
+    assert response.status_code == 200, response.text
+    assert counts == [0]
+
 
 def test_narrative_persists_separately_without_mutating_assessment(client, org, snapshot, enabled, monkeypatch, db_conn):  # noqa: F811
     from dq_scoring.services import assessment_report_service as service

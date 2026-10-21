@@ -1,9 +1,10 @@
 """Abstract compute engine port for pushdown execution."""
 
 from typing import Protocol, runtime_checkable
+from uuid import UUID
 
+from dq_scoring.common.profiling import SnapshotProfile
 from dq_scoring.core.entities import (
-    CanonicalMetric,
     DatasetSnapshot,
     OutlierExecutionOutput,
     QualityRule,
@@ -16,9 +17,9 @@ class IComputeEnginePort(Protocol):
     """Abstract port for compute plane operations (e.g. Apache Spark on k3s)."""
 
     def profile_snapshot(
-        self, snapshot: DatasetSnapshot, columns: list[str]
-    ) -> list[CanonicalMetric]:
-        """Compute single-pass canonical profiling metrics for columns."""
+        self, snapshot: DatasetSnapshot, *, profile_id: UUID, fingerprint: str,
+    ) -> SnapshotProfile:
+        """Compute exact FULL evidence for every canonical root column."""
         ...
 
     def execute_rules(

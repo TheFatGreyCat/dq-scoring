@@ -150,7 +150,7 @@ def test_admin_creator_self_approves_with_reason_and_atomic_audit(world: World, 
 
 def test_self_approved_configuration_can_run_and_gate_is_unchanged(world: World):
     admin = world.actor("WORKSPACE_ADMIN")
-    snap = register_snapshot_via_api(world.client, admin.headers, content_or_path=b"id,fare\n1,12\n", asset_id=world.asset_id)
+    snap = register_snapshot_via_api(world.client, admin.headers, content_or_path=b"id,fare\n1,12\n", asset_id=world.asset_id, process_full_profile=True)
     ruleset_id = world.pending("rulesets", admin)
     policy_id = world.pending("policies", admin)
     run_body = {"snapshot_id": snap["snapshot_id"], "ruleset_id": ruleset_id, "policy_id": policy_id, "idempotency_key": f"self-{uuid4()}"}

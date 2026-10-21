@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -13,10 +14,9 @@ import psycopg
 
 from dq_scoring.adapters.db.postgres_import_store import PostgresImportStore
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
-from dq_scoring.adapters.source.tabular_import import (
-    ImportInspectionException,
-    TabularImportAdapter,
-)
+from dq_scoring.adapters.source.tabular_import import TabularImportAdapter
+from dq_scoring.adapters.source.tabular_normalization import ImportInspectionException
+from dq_scoring.adapters.storage.normalized_snapshot import legacy_equivalence_witness
 from dq_scoring.adapters.storage.s3_object_store import S3ObjectStoreAdapter
 from dq_scoring.adapters.storage.s3_settings import get_s3_settings
 from dq_scoring.core.exceptions import RunAbortedError
@@ -80,37 +80,38 @@ def migrate(conn: psycopg.Connection, tenant_id: UUID, asset_ids: list[UUID], ro
         raise ValueError("SNAPSHOT_VERSIONING_REQUIRED")
     adapter = TabularImportAdapter(store)
     for index, (old_id, asset_id, path, fmt, digest, user_id) in enumerate(checked):
-        upload_id = uuid4()
-        key = f"imports/{tenant_id}/{upload_id}/source.{fmt.lower()}"
-        staged = store.put_file(settings.bucket_staging, key, path)
-        inspection = adapter.inspect_and_normalize(
-            source=ObjectRef(settings.bucket_staging, key, staged.version_id),
-            destination_bucket=settings.bucket_snapshots,
-            destination_prefix=f"snapshots/{tenant_id}/{upload_id}/attempt-1",
-            file_format=fmt,
-            delimiter=str(legacy[index][2].get("delimiter", ",")),
-        )
-        if inspection.raw_sha256 != digest:
-            raise ValueError("OBJECT_CHANGED")
-        source = {
-            "bucket": inspection.raw_ref.bucket, "key": inspection.raw_ref.key,
-            "version_id": inspection.raw_ref.version_id, "size_bytes": inspection.raw_size_bytes,
-            "content_sha256": inspection.raw_sha256, "format": fmt,
-            "canonical": {
-                "bucket": inspection.canonical_ref.bucket, "key": inspection.canonical_ref.key,
-                "version_id": inspection.canonical_ref.version_id,
-                "size_bytes": inspection.canonical_size_bytes,
-                "content_sha256": inspection.canonical_sha256, "format": "PARQUET",
-            }, "normalization_version": inspection.normalization_version,
-        }
         with conn.transaction():
             set_tenant_context(conn, tenant_id)
+            PostgresImportStore.lock_tenant_storage(conn, tenant_id)
+            upload_id = uuid4()
+            key = f'snapshots/{tenant_id}/{upload_id}/source.{fmt.lower()}'
+            staged = store.put_file(settings.bucket_snapshots, key, path)
+            inspection = adapter.inspect_snapshot(
+                source=ObjectRef(settings.bucket_snapshots, key, staged.version_id),
+                source_store=store, storage_mode='OWNED_RAW', reuse_owned=True,
+                destination_bucket=settings.bucket_snapshots,
+                destination_prefix=f'snapshots/{tenant_id}/{upload_id}', file_format=fmt,
+                delimiter=str(legacy[index][2].get('delimiter', ',')),
+            )
+            if inspection.raw_sha256 != digest:
+                raise ValueError('OBJECT_CHANGED')
+            source = {
+                'descriptor_version': 2, 'storage_mode': 'OWNED_RAW',
+                'bucket': inspection.raw_ref.bucket, 'key': inspection.raw_ref.key,
+                'version_id': inspection.raw_ref.version_id, 'size_bytes': inspection.raw_size_bytes,
+                'content_sha256': inspection.raw_sha256, 'format': fmt,
+                'normalization_version': inspection.normalization_version,
+                'normalization': {**asdict(inspection.normalization), 'columns': list(inspection.normalization.columns)},
+            }
+            witness = legacy_equivalence_witness(conn, tenant_id, asset_id, source, store, settings)
             PostgresImportStore.create_session(
                 conn, upload_id=upload_id, tenant_id=tenant_id, user_id=user_id,
                 asset_id=asset_id, asset_name=None, client_request_id=uuid4(), format=fmt,
                 original_filename=path.name, size_bytes=inspection.raw_size_bytes,
-                staging_key=key, destination_location=inspection.canonical_ref.s3a_uri,
+                staging_key=key, destination_location=inspection.raw_ref.s3a_uri,
                 multipart_id=None, status="VERIFIED", manifest={
+                    'legacy_equivalence': witness, 'upload_layout_version': 2,
+                    'staging_bucket': settings.bucket_snapshots, 'storage_mode': 'OWNED_RAW',
                     "source_descriptor": source, "columns": inspection.columns,
                     "exact_row_count": inspection.exact_row_count, "preview": inspection.preview_rows,
                     "profile": inspection.profile, "warnings": inspection.warnings,

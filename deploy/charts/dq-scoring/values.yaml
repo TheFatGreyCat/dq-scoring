@@ -42,6 +42,23 @@ minio:
     snapshots: dq-snapshots-local
     artifacts: dq-artifacts-local
 
+# Optional operator-owned read-only shared S3 source. Disabled by default; separate credentials and CA from the owned minio store.
+# Credentials come from existingSecret only. Protected processing requires an exact HTTPS Service endpoint and a dedicated caSecret.
+sourceStore:
+  enabled: false
+  endpoint: ""
+  region: us-east-1
+  useSsl: false
+  bucket: ""
+  tenantPrefixes: {}
+  retentionGuaranteed: false
+  existingSecret: ""
+  accessKeyIdKey: access_key
+  secretAccessKeyKey: secret_key
+  caSecret: ""
+  caKey: source-s3-ca.pem
+  allowedService: {name: "", namespace: "", port: 443, podSelector: {}}
+
 # Optional external advisory. Never used by imports, privacy scans or scoring.
 # Endpoint/model must be operator-approved before enabling. API key is an existing Secret only.
 llm:
@@ -50,6 +67,19 @@ llm:
   model: ""
   existingSecret: ""
   apiKeyKey: api_key
+  caSecret: ""
+  caKey: ca.crt
+
+# Optional LOCAL provider for semantic suggestions. Default OFF; separate operator-owned config.
+# Endpoint/model/Secret/egress must be operator-approved. LOCAL is not implicitly trusted or approved.
+llmLocal:
+  enabled: false
+  endpoint: ""
+  model: ""
+  existingSecret: ""
+  apiKeyKey: api_key
+  caSecret: ""
+  caKey: ca.crt
 
 security:
   jwtAlgorithm: HS256

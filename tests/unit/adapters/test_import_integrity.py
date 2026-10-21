@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import io
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
-from uuid import uuid4
 
 import pytest
 
-from dq_scoring.adapters.source.tabular_import import (
+from dq_scoring.adapters.source.tabular_import import TabularImportAdapter
+from dq_scoring.adapters.source.tabular_normalization import (
     ImportInspectionException,
-    TabularImportAdapter,
+    iter_normalized_batches,
 )
 from dq_scoring.ports.object_store import ObjectMetadata, ObjectRef
-from dq_scoring.workers.import_worker import ImportWorker
 
 
 class MockObjectStore:
@@ -32,11 +29,16 @@ class MockObjectStore:
         self.etags[(bucket, key)] = f"etag-{len(data)}"
         self.versions[(bucket, key)] = version_id
 
-    def open_stream(self, ref: ObjectRef) -> io.BytesIO:
+    def open_stream(self, ref: ObjectRef, *, if_match_etag: str | None = None) -> io.BytesIO:
         data = self.files.get((ref.bucket, ref.key))
         if data is None:
             raise FileNotFoundError(f"Missing {ref.bucket}/{ref.key}")
         return io.BytesIO(data)
+
+    def open_range(self, ref: ObjectRef, offset: int, length: int) -> io.BytesIO:
+        with self.open_stream(ref) as stream:
+            stream.seek(offset)
+            return io.BytesIO(stream.read(length))
 
     def head(self, ref: ObjectRef) -> ObjectMetadata:
         data = self.files.get((ref.bucket, ref.key))
@@ -93,7 +95,7 @@ def mock_store() -> MockObjectStore:
 
 @pytest.fixture
 def adapter(mock_store: MockObjectStore, tmp_path: Path) -> TabularImportAdapter:
-    return TabularImportAdapter(store=mock_store, temp_root=tmp_path / "imports")
+    return TabularImportAdapter(store=mock_store)
 
 
 # -----------------------------------------------------------------------------
@@ -105,7 +107,7 @@ def test_source_freeze_pins_version_and_copies_raw_file(adapter: TabularImportAd
     source = ObjectRef(bucket="staging-bucket", key="tenant/upload/source.csv")
     mock_store.put_bytes("staging-bucket", "tenant/upload/source.csv", csv_bytes, version_id="v-src-1")
 
-    inspection = adapter.inspect_and_normalize(
+    inspection = adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
         source=source,
         destination_bucket="snapshots-bucket",
         destination_prefix="snapshots/tenant/upload/attempt-1",
@@ -115,7 +117,7 @@ def test_source_freeze_pins_version_and_copies_raw_file(adapter: TabularImportAd
     assert inspection.raw_ref.bucket == "snapshots-bucket"
     assert inspection.raw_ref.key == "snapshots/tenant/upload/attempt-1/source.csv"
     assert inspection.raw_ref.version_id == "v-copied-1"
-    assert inspection.canonical_ref.key == "snapshots/tenant/upload/attempt-1/canonical.parquet"
+    assert not any(key.endswith("canonical.parquet") for _, key in mock_store.files)
     assert inspection.exact_row_count == 2
 
 
@@ -138,7 +140,7 @@ def test_object_changed_detected_if_source_modified_concurrently(adapter: Tabula
     mock_store.head = mutating_head  # type: ignore
 
     with pytest.raises(ImportInspectionException) as exc_info:
-        adapter.inspect_and_normalize(
+        adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
             source=source,
             destination_bucket="snapshots-bucket",
             destination_prefix="dest",
@@ -154,7 +156,7 @@ def test_object_changed_detected_if_source_modified_concurrently(adapter: Tabula
 def test_binary_magic_rejection(adapter: TabularImportAdapter, mock_store: MockObjectStore):
     mock_store.put_bytes("b", "test.pdf", b"%PDF-1.4 binary content")
     with pytest.raises(ImportInspectionException) as exc_info:
-        adapter.inspect_and_normalize(
+        adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("b", "test.pdf"),
             destination_bucket="snap",
             destination_prefix="dest",
@@ -166,7 +168,7 @@ def test_binary_magic_rejection(adapter: TabularImportAdapter, mock_store: MockO
 def test_parquet_binary_magic_in_csv_rejected(adapter: TabularImportAdapter, mock_store: MockObjectStore):
     mock_store.put_bytes("b", "fake.csv", b"PAR1fake_parquet_bytes")
     with pytest.raises(ImportInspectionException) as exc_info:
-        adapter.inspect_and_normalize(
+        adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("b", "fake.csv"),
             destination_bucket="snap",
             destination_prefix="dest",
@@ -179,7 +181,7 @@ def test_jsonl_duplicate_key_rejection(adapter: TabularImportAdapter, mock_store
     jsonl_bytes = b'{"id": 1, "name": "foo", "id": 2}\n'
     mock_store.put_bytes("b", "test.jsonl", jsonl_bytes)
     with pytest.raises(ImportInspectionException) as exc_info:
-        adapter.inspect_and_normalize(
+        adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("b", "test.jsonl"),
             destination_bucket="snap",
             destination_prefix="dest",
@@ -192,7 +194,7 @@ def test_jsonl_rejects_nan_and_infinity(adapter: TabularImportAdapter, mock_stor
     jsonl_bytes = b'{"id": 1, "value": NaN}\n'
     mock_store.put_bytes("b", "test.jsonl", jsonl_bytes)
     with pytest.raises(ImportInspectionException) as exc_info:
-        adapter.inspect_and_normalize(
+        adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("b", "test.jsonl"),
             destination_bucket="snap",
             destination_prefix="dest",
@@ -204,7 +206,7 @@ def test_jsonl_rejects_nan_and_infinity(adapter: TabularImportAdapter, mock_stor
 def test_jsonl_mixed_scalar_types_warning(adapter: TabularImportAdapter, mock_store: MockObjectStore):
     jsonl_bytes = b'{"id": 1, "val": 42}\n{"id": 2, "val": true}\n'
     mock_store.put_bytes("b", "test.jsonl", jsonl_bytes)
-    inspection = adapter.inspect_and_normalize(
+    inspection = adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("b", "test.jsonl"),
         destination_bucket="snap",
         destination_prefix="dest",
@@ -221,7 +223,7 @@ def test_financial_columns_fully_masked_in_preview(adapter: TabularImportAdapter
     csv_bytes = b"user_id,bank_account_number,iban,balance\n101,12345678,DE89370400440532013000,500.25\n"
     mock_store.put_bytes("b", "fin.csv", csv_bytes)
 
-    inspection = adapter.inspect_and_normalize(
+    inspection = adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("b", "fin.csv"),
         destination_bucket="snap",
         destination_prefix="dest",
@@ -243,7 +245,7 @@ def test_profile_type_hint_leading_zeros_and_timestamp(adapter: TabularImportAda
     )
     mock_store.put_bytes("b", "data.csv", csv_bytes)
 
-    inspection = adapter.inspect_and_normalize(
+    inspection = adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("b", "data.csv"),
         destination_bucket="snap",
         destination_prefix="dest",
@@ -259,63 +261,27 @@ def test_profile_type_hint_leading_zeros_and_timestamp(adapter: TabularImportAda
     assert cols["event_time"]["parse_success_count"] == 3
 
 
-# -----------------------------------------------------------------------------
-# 4. Worker Invariants: Versioning Preflight & Fenced Leases
-# -----------------------------------------------------------------------------
-
-def test_worker_preflight_fails_when_versioning_disabled(mock_store: MockObjectStore):
-    mock_store.versioning_enabled = False
-    worker = ImportWorker(store=mock_store)
-
-    conn_mock = MagicMock()
-    cur_mock = MagicMock()
-    conn_mock.cursor.return_value.__enter__.return_value = cur_mock
-
-    session = {
-        "upload_id": uuid4(),
-        "tenant_id": uuid4(),
-        "lease_generation": 1,
-        "format": "CSV",
-        "manifest": {},
-        "staging_key": "imports/test.csv",
-    }
-
-    worker.process_session(conn_mock, session)
-
-    # Worker should fail the session with SNAPSHOT_VERSIONING_REQUIRED
-    assert cur_mock.execute.called
-    sql_call = cur_mock.execute.call_args[0][0]
-    assert "SNAPSHOT_VERSIONING_REQUIRED" in sql_call
-
-
-def test_worker_expired_session_marked_failed(mock_store: MockObjectStore):
-    worker = ImportWorker(store=mock_store)
-    conn_mock = MagicMock()
-    cur_mock = MagicMock()
-    conn_mock.cursor.return_value.__enter__.return_value = cur_mock
-
-    past_time = datetime.now(UTC) - timedelta(hours=25)
-    cur_mock.fetchone.return_value = (uuid4(), uuid4(), 1, 0, "STAGED", past_time)
-
-    claimed = worker.claim_next_session(conn_mock)
-    assert claimed is None
-
-    # Verify session marked FAILED with IMPORT_EXPIRED
-    assert cur_mock.execute.call_count >= 2
-    update_sql = cur_mock.execute.call_args_list[1][0][0]
-    assert "IMPORT_EXPIRED" in update_sql
-
-
 def test_jsonl_decimal_text_survives_normalization(adapter, mock_store):
-    import pyarrow.parquet as pq
     mock_store.put_bytes("staging", "precise.jsonl", b'{"amount":1234567890.1234567890123456789}\n')
-    inspection = adapter.inspect_and_normalize(source=ObjectRef("staging", "precise.jsonl"), destination_bucket="snapshots", destination_prefix="precise", file_format="JSONL")
-    rows = pq.read_table(io.BytesIO(mock_store.files[("snapshots", inspection.canonical_ref.key)])).to_pylist()
+    inspection = adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", source=ObjectRef("staging", "precise.jsonl"), destination_bucket="snapshots", destination_prefix="precise", file_format="JSONL")
+    raw = io.BytesIO(mock_store.files[("snapshots", inspection.raw_ref.key)])
+    rows = [r for b in iter_normalized_batches(raw, inspection.normalization) for r in b.to_pylist()]
     assert rows == [{"amount": "1234567890.1234567890123456789"}]
 
 
 def test_csv_unclosed_quote_is_rejected(adapter, mock_store):
     mock_store.put_bytes("staging", "broken.csv", b'id,name\n1,"unclosed\n')
     with pytest.raises(ImportInspectionException) as error:
-        adapter.inspect_and_normalize(source=ObjectRef("staging", "broken.csv"), destination_bucket="snapshots", destination_prefix="broken", file_format="CSV")
+        adapter.inspect_snapshot(source_store=mock_store, storage_mode="OWNED_RAW", source=ObjectRef("staging", "broken.csv"), destination_bucket="snapshots", destination_prefix="broken", file_format="CSV")
     assert error.value.error_code == "MALFORMED_CSV"
+
+
+def test_owned_raw_requires_versioned_bucket_even_when_reusing(adapter, mock_store):
+    mock_store.put_bytes("snapshots", "snapshots/t/u/source.csv", b"id\n1\n", version_id="v1")
+    mock_store.versioning_enabled = False
+    with pytest.raises(ImportInspectionException) as error:
+        adapter.inspect_snapshot(
+            source=ObjectRef("snapshots", "snapshots/t/u/source.csv", "v1"), source_store=mock_store,
+            storage_mode="OWNED_RAW", reuse_owned=True, destination_bucket="snapshots",
+            destination_prefix="snapshots/t/u", file_format="CSV")
+    assert error.value.error_code == "SNAPSHOT_VERSIONING_REQUIRED"

@@ -29,7 +29,8 @@ export function describeError(
     };
   }
 
-  const errorCode = error.problem?.error_code ?? error.problem?.reason;
+  const detailCode = /^[A-Z][A-Z0-9_]{2,63}$/.test(error.problem?.detail ?? "") ? error.problem?.detail : undefined;
+  const errorCode = error.problem?.error_code ?? error.problem?.reason ?? detailCode;
   if (errorCode && t) {
     const errorKey = `error.${errorCode}` as TranslationKey | SurfaceTranslationKey;
     try {

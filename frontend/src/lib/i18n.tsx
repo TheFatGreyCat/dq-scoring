@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { advisoryTranslations } from "./advisoryTranslations";
 import { governanceTranslations } from "./governanceTranslations";
 import { privacyTranslations } from "./privacyTranslations";
+import { profileTranslations } from "./profileTranslations";
+import { semanticTranslations } from "./semanticTranslations";
 import { surfaceTranslations } from "./surfaceTranslations";
 export type Language = "vi" | "en";
 
@@ -10,6 +12,8 @@ export const DICTIONARY = {
     ...advisoryTranslations.vi,
     ...governanceTranslations.vi,
     ...privacyTranslations.vi,
+    ...profileTranslations.vi,
+    ...semanticTranslations.vi,
     ...surfaceTranslations.vi,
     // Navigation
     "nav.overview": "Tổng quan",
@@ -203,6 +207,8 @@ export const DICTIONARY = {
     ...advisoryTranslations.en,
     ...governanceTranslations.en,
     ...privacyTranslations.en,
+    ...profileTranslations.en,
+    ...semanticTranslations.en,
     ...surfaceTranslations.en,
     // Navigation
     "nav.overview": "Overview",

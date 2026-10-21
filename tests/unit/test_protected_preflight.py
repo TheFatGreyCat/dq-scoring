@@ -261,3 +261,69 @@ def test_blocked_probe_distinguishes_timeout_from_closed_listener(monkeypatch, r
     with pytest.raises(SystemExit) as outcome:
         exec(preflight._blocked_tcp_probe("10.0.0.2", 8080), {})  # noqa: S102 - execute our fixed probe with synthetic sockets
     assert outcome.value.code == expected
+
+
+_SRC_CM = {
+    "DQ_SOURCE_S3_ENABLED": "true",
+    "DQ_SOURCE_S3_ENDPOINT_URL": "https://source.ext.svc.cluster.local:443",
+    "DQ_SOURCE_S3_CA_BUNDLE": "/opt/dq/source-ca/source-s3-ca.pem",
+}
+_SRC_SELECTOR = {"app": "source"}
+
+
+def _source_policies(drop_role=None, port="443", namespace="ext", host="source.ext.svc.cluster.local"):
+    def policy(role):
+        egress = [{"toEndpoints": [{"matchLabels": {"k8s:io.kubernetes.pod.namespace": namespace, "app": "source"}}],
+                   "toPorts": [{"ports": [{"port": port, "protocol": "TCP"}]}]}]
+        if role != drop_role:
+            egress.append({"toEndpoints": [{"matchLabels": {"k8s:io.kubernetes.pod.namespace": "kube-system"}}],
+                           "toPorts": [{"ports": [{"port": "53", "protocol": "ANY"}], "rules": {"dns": [{"matchName": host}]}}]})
+        return {"metadata": {"name": f"dq-dq-scoring-{role}"}, "spec": {"egress": egress}}
+    return [policy(r) for r in ("api", "import", "driver", "executor")]
+
+
+def _service_kubectl(args, **kwargs):
+    if args[:2] == ["get", "service"]:
+        return 0, json.dumps({"spec": {"selector": _SRC_SELECTOR}}), ""
+    return 1, "", ""
+
+
+@pytest.mark.parametrize("kwargs", [{"drop_role": "executor"}, {"port": "8443"}, {"namespace": "other"}, {"host": "other.ext.svc.cluster.local"}])
+def test_source_egress_requires_exact_service_and_dns_in_every_policy(monkeypatch, kwargs):
+    monkeypatch.setattr(preflight, "_run_kubectl", _service_kubectl)
+    assert not preflight._check_source_egress("synthetic", "dq", _source_policies(**kwargs), _SRC_CM, None)
+
+
+def test_source_egress_exact_rules_pass(monkeypatch):
+    monkeypatch.setattr(preflight, "_run_kubectl", _service_kubectl)
+    assert preflight._check_source_egress("synthetic", "dq", _source_policies(), _SRC_CM, None)
+
+
+def test_source_tls_must_pass_in_driver_and_executor_and_reject_wrong_ca(monkeypatch):
+    pem = "-----BEGIN CERTIFICATE-----"
+    calls = []
+
+    def exec_pod(ns, pod, container, code, **kw):
+        calls.append(container)
+        if "open(" in code:
+            return 0, pem + ("-owned" if "DQ_S3_CA_BUNDLE" in code else "-source")
+        return (1, "") if container == "probe" else (0, "SOURCE_TLS_VERIFIED")
+
+    monkeypatch.setattr(preflight, "_exec_in_pod", exec_pod)
+    assert not preflight._check_source_tls("synthetic", _SRC_CM, "worker-pod", "probe-pod", None)
+    assert calls[-2:] == ["worker", "probe"]
+
+
+def test_source_tls_rejects_unreadable_source_ca(monkeypatch):
+    monkeypatch.setattr(preflight, '_exec_in_pod', lambda *a, **kw: (1, ''))
+    assert not preflight._check_source_tls('synthetic', _SRC_CM, 'worker-pod', 'probe-pod', None)
+
+
+@pytest.mark.parametrize('url', ['https://source.example.com', 'https://source.ext.svc.cluster.local:bad', 'https://user@source.ext.svc.cluster.local', 'http://source.ext.svc.cluster.local'])
+def test_source_preflight_rejects_nonservice_endpoint(url):
+    assert preflight._source_service({'DQ_SOURCE_S3_ENDPOINT_URL': url}) is None
+
+
+def test_source_preflight_missing_config_does_not_mean_disabled(monkeypatch):
+    monkeypatch.setattr(preflight, '_run_kubectl', lambda *a, **kw: (1, '', ''))
+    assert preflight._source_config('synthetic', 'dq', None) is None

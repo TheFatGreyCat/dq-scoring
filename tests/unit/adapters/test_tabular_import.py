@@ -1,4 +1,4 @@
-"""Unit tests for TabularImportAdapter: CSV, Parquet, JSONL inspection and canonical Parquet normalization."""
+"""Unit tests for TabularImportAdapter: CSV, Parquet, JSONL inspection and read-time normalization (raw-only snapshots)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from dq_scoring.adapters.source.tabular_import import (
+from dq_scoring.adapters.source.tabular_import import TabularImportAdapter
+from dq_scoring.adapters.source.tabular_normalization import (
     ImportInspectionException,
-    TabularImportAdapter,
+    iter_normalized_batches,
 )
 from dq_scoring.ports.object_store import ObjectRef
 
@@ -22,15 +23,24 @@ class InMemoryObjectStore:
 
     def __init__(self) -> None:
         self.files: dict[tuple[str, str], bytes] = {}
+        self.stream_calls: list[tuple[ObjectRef, str | None]] = []
+        self.copies: list[ObjectRef] = []
+        self.aborted: list[str] = []
 
     def put_bytes(self, bucket: str, key: str, data: bytes) -> None:
         self.files[(bucket, key)] = data
 
-    def open_stream(self, ref: ObjectRef) -> io.BytesIO:
+    def open_stream(self, ref: ObjectRef, *, if_match_etag: str | None = None) -> io.BytesIO:
+        self.stream_calls.append((ref, if_match_etag))
         data = self.files.get((ref.bucket, ref.key))
         if data is None:
             raise FileNotFoundError(f"Missing {ref.bucket}/{ref.key}")
         return io.BytesIO(data)
+
+    def open_range(self, ref: ObjectRef, offset: int, length: int) -> io.BytesIO:
+        with self.open_stream(ref) as stream:
+            stream.seek(offset)
+            return io.BytesIO(stream.read(length))
 
     def head(self, ref: ObjectRef):
         data = self.files.get((ref.bucket, ref.key))
@@ -41,6 +51,7 @@ class InMemoryObjectStore:
             ref=ObjectRef(bucket=ref.bucket, key=ref.key, version_id=ref.version_id or "v1"),
             size_bytes=len(data),
             etag="mock-etag",
+            version_id=ref.version_id or "v1",
         )
 
     def create_multipart(self, bucket: str, key: str) -> str:
@@ -69,7 +80,11 @@ class InMemoryObjectStore:
             from dq_scoring.ports.object_store import ObjectChangedError
             raise ObjectChangedError(f"ETag mismatch: {source_etag}")
         self.files[(bucket, key)] = data
+        self.copies.append(source)
         return self.head(ObjectRef(bucket=bucket, key=key, version_id="v1"))
+
+    def abort_multipart(self, bucket: str, key: str, multipart_id: str) -> None:
+        self.aborted.append(multipart_id)
 
     def is_versioning_enabled(self, bucket: str) -> bool:
         return True
@@ -81,6 +96,12 @@ class InMemoryObjectStore:
         self.files[(bucket, key)] = path.read_bytes()
         return self.head(ObjectRef(bucket=bucket, key=key, version_id="v1"))
 
+def _read_rows(store: InMemoryObjectStore, inspection) -> list[dict[str, Any]]:
+    """Replay read-time normalization from the pinned raw object (no canonical copy exists)."""
+    raw = io.BytesIO(store.files[(inspection.raw_ref.bucket, inspection.raw_ref.key)])
+    return [row for batch in iter_normalized_batches(raw, inspection.normalization) for row in batch.to_pylist()]
+
+
 @pytest.fixture
 def mem_store() -> InMemoryObjectStore:
     return InMemoryObjectStore()
@@ -88,7 +109,7 @@ def mem_store() -> InMemoryObjectStore:
 
 @pytest.fixture
 def import_adapter(mem_store: InMemoryObjectStore, tmp_path: Path) -> TabularImportAdapter:
-    return TabularImportAdapter(store=mem_store, temp_root=tmp_path / "imports")
+    return TabularImportAdapter(store=mem_store)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +127,7 @@ def test_csv_valid_inspection_and_normalization(mem_store: InMemoryObjectStore, 
     mem_store.put_bytes("staging", "tenant1/trips.csv", csv_data)
     source_ref = ObjectRef("staging", "tenant1/trips.csv")
 
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=source_ref,
         destination_bucket="snapshots",
         destination_prefix="snapshots/tenant1/trips/attempt-1",
@@ -131,7 +152,7 @@ def test_csv_valid_inspection_and_normalization(mem_store: InMemoryObjectStore, 
 def test_csv_empty_file_rejected(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     mem_store.put_bytes("staging", "empty.csv", b"")
     with pytest.raises(ImportInspectionException) as exc:
-        import_adapter.inspect_and_normalize(
+        import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("staging", "empty.csv"),
             destination_bucket="snapshots",
             destination_prefix="dest",
@@ -143,7 +164,7 @@ def test_csv_empty_file_rejected(mem_store: InMemoryObjectStore, import_adapter:
 def test_csv_header_only_rejected(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     mem_store.put_bytes("staging", "header_only.csv", b"col1,col2\n")
     with pytest.raises(ImportInspectionException) as exc:
-        import_adapter.inspect_and_normalize(
+        import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("staging", "header_only.csv"),
             destination_bucket="snapshots",
             destination_prefix="dest",
@@ -155,7 +176,7 @@ def test_csv_header_only_rejected(mem_store: InMemoryObjectStore, import_adapter
 def test_csv_duplicate_header_rejected(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     mem_store.put_bytes("staging", "dup.csv", b"Account,Amount,Account\n1,100,2\n")
     with pytest.raises(ImportInspectionException) as exc:
-        import_adapter.inspect_and_normalize(
+        import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("staging", "dup.csv"),
             destination_bucket="snapshots",
             destination_prefix="dest",
@@ -167,7 +188,7 @@ def test_csv_duplicate_header_rejected(mem_store: InMemoryObjectStore, import_ad
 def test_csv_blank_column_header_rejected(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     mem_store.put_bytes("staging", "blank_col.csv", b"Account,,Amount\n1,x,100\n")
     with pytest.raises(ImportInspectionException) as exc:
-        import_adapter.inspect_and_normalize(
+        import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("staging", "blank_col.csv"),
             destination_bucket="snapshots",
             destination_prefix="dest",
@@ -179,7 +200,7 @@ def test_csv_blank_column_header_rejected(mem_store: InMemoryObjectStore, import
 def test_csv_mismatched_row_field_count_rejected(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     mem_store.put_bytes("staging", "bad_rows.csv", b"c1,c2\nv1,v2\nv1,v2,extra\n")
     with pytest.raises(ImportInspectionException) as exc:
-        import_adapter.inspect_and_normalize(
+        import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("staging", "bad_rows.csv"),
             destination_bucket="snapshots",
             destination_prefix="dest",
@@ -191,7 +212,7 @@ def test_csv_mismatched_row_field_count_rejected(mem_store: InMemoryObjectStore,
 def test_csv_binary_magic_disguised_rejected(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     mem_store.put_bytes("staging", "fake_pdf.csv", b"%PDF-1.4\n1 0 obj\n<<>>\n")
     with pytest.raises(ImportInspectionException) as exc:
-        import_adapter.inspect_and_normalize(
+        import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("staging", "fake_pdf.csv"),
             destination_bucket="snapshots",
             destination_prefix="dest",
@@ -202,7 +223,7 @@ def test_csv_binary_magic_disguised_rejected(mem_store: InMemoryObjectStore, imp
 
 def test_csv_single_column_warning(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     mem_store.put_bytes("staging", "single.csv", b"single_column\nval1\nval2\n")
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "single.csv"),
         destination_bucket="snapshots",
         destination_prefix="dest",
@@ -224,7 +245,7 @@ def test_jsonl_valid_flat_inspection_and_normalization(mem_store: InMemoryObject
     )
     mem_store.put_bytes("staging", "data.jsonl", jsonl_data)
 
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "data.jsonl"),
         destination_bucket="snapshots",
         destination_prefix="dest",
@@ -244,7 +265,7 @@ def test_jsonl_nested_object_supported(mem_store: InMemoryObjectStore, import_ad
         b'{"id": "2", "details": null}\n'
     )
     mem_store.put_bytes("staging", "nested_obj.jsonl", jsonl_data)
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "nested_obj.jsonl"),
         destination_bucket="snapshots",
         destination_prefix="dest",
@@ -254,8 +275,7 @@ def test_jsonl_nested_object_supported(mem_store: InMemoryObjectStore, import_ad
     details_col = next(c for c in inspection.columns if c["name"] == "details")
     assert details_col["structural_encoding"] == "JSON"
     assert sorted(details_col["logical_types"]) == ["NULL", "OBJECT"]
-    raw_pq = mem_store.files[("snapshots", inspection.canonical_ref.key)]
-    read_rows = pq.read_table(io.BytesIO(raw_pq)).to_pylist()
+    read_rows = _read_rows(mem_store, inspection)
     assert read_rows == [
         {"id": "1", "details": '{"active":true,"score":90}'},
         {"id": "2", "details": None},
@@ -265,7 +285,7 @@ def test_jsonl_nested_object_supported(mem_store: InMemoryObjectStore, import_ad
 def test_jsonl_nested_array_supported(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
     jsonl_data = b'{"id": "1", "tags": ["a", "b"]}\n'
     mem_store.put_bytes("staging", "nested_arr.jsonl", jsonl_data)
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "nested_arr.jsonl"),
         destination_bucket="snapshots",
         destination_prefix="dest",
@@ -275,8 +295,7 @@ def test_jsonl_nested_array_supported(mem_store: InMemoryObjectStore, import_ada
     tags_col = next(c for c in inspection.columns if c["name"] == "tags")
     assert tags_col["structural_encoding"] == "JSON"
     assert tags_col["logical_types"] == ["ARRAY"]
-    raw_pq = mem_store.files[("snapshots", inspection.canonical_ref.key)]
-    read_rows = pq.read_table(io.BytesIO(raw_pq)).to_pylist()
+    read_rows = _read_rows(mem_store, inspection)
     assert read_rows == [{"id": "1", "tags": '["a","b"]'}]
 
 def test_jsonl_duplicate_key_rejected(mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter) -> None:
@@ -285,7 +304,7 @@ def test_jsonl_duplicate_key_rejected(mem_store: InMemoryObjectStore, import_ada
     )
     mem_store.put_bytes("staging", "dup_key.jsonl", jsonl_data)
     with pytest.raises(ImportInspectionException) as exc:
-        import_adapter.inspect_and_normalize(
+        import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
             source=ObjectRef("staging", "dup_key.jsonl"),
             destination_bucket="snapshots",
             destination_prefix="dest",
@@ -312,7 +331,7 @@ def test_parquet_valid_scalar_inspection(mem_store: InMemoryObjectStore, import_
     pq.write_table(table, buf)
     mem_store.put_bytes("staging", "scalar.parquet", buf.getvalue())
 
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "scalar.parquet"),
         destination_bucket="snapshots",
         destination_prefix="dest",
@@ -334,7 +353,7 @@ def test_parquet_nested_struct_supported(mem_store: InMemoryObjectStore, import_
     pq.write_table(table, buf)
     mem_store.put_bytes("staging", "nested.parquet", buf.getvalue())
 
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "nested.parquet"),
         destination_bucket="snapshots",
         destination_prefix="dest",
@@ -344,8 +363,7 @@ def test_parquet_nested_struct_supported(mem_store: InMemoryObjectStore, import_
     col = inspection.columns[0]
     assert col["name"] == "nested"
     assert col["structural_encoding"] == "JSON"
-    raw_pq = mem_store.files[("snapshots", inspection.canonical_ref.key)]
-    read_rows = pq.read_table(io.BytesIO(raw_pq)).to_pylist()
+    read_rows = _read_rows(mem_store, inspection)
     assert read_rows == [{"nested": '{"inner":1}'}, {"nested": '{"inner":2}'}]
 
 
@@ -364,15 +382,15 @@ def test_parquet_map_inside_struct_preserves_object_semantics(mem_store, import_
     buf = io.BytesIO()
     pq.write_table(table, buf)
     mem_store.put_bytes("staging", "map.parquet", buf.getvalue())
-    inspection = import_adapter.inspect_and_normalize(source=ObjectRef("staging", "map.parquet"), destination_bucket="snapshots", destination_prefix="map", file_format="PARQUET")
-    rows = pq.read_table(io.BytesIO(mem_store.files[("snapshots", inspection.canonical_ref.key)])).to_pylist()
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", source=ObjectRef("staging", "map.parquet"), destination_bucket="snapshots", destination_prefix="map", file_format="PARQUET")
+    rows = _read_rows(mem_store, inspection)
     assert rows == [{"payload": '{"attributes":{"a":1,"b":2}}'}]
 
 
 def test_mixed_json_column_quotes_literal_strings_and_keeps_decimal(mem_store, import_adapter):
     mem_store.put_bytes("staging", "mixed.jsonl", b'{"payload":{"amount":1234567890.1234567890123456789}}\n{"payload":"{\\"x\\":1}"}\n{"payload":true}\n{"payload":null}\n')
-    inspection = import_adapter.inspect_and_normalize(source=ObjectRef("staging", "mixed.jsonl"), destination_bucket="snapshots", destination_prefix="mixed", file_format="JSONL")
-    rows = pq.read_table(io.BytesIO(mem_store.files[("snapshots", inspection.canonical_ref.key)])).to_pylist()
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", source=ObjectRef("staging", "mixed.jsonl"), destination_bucket="snapshots", destination_prefix="mixed", file_format="JSONL")
+    rows = _read_rows(mem_store, inspection)
     assert rows == [{"payload": '{"amount":1234567890.1234567890123456789}'}, {"payload": '"{\\"x\\":1}"'}, {"payload": "true"}, {"payload": None}]
     assert inspection.columns[0]["logical_types"] == ["BOOLEAN", "NULL", "OBJECT", "STRING"]
     assert inspection.profile["columns"][0]["type_hint"] == "JSON"
@@ -388,7 +406,7 @@ def test_import_sensitive_match_late_in_file_masks_early_preview_and_profile(
     lines.append(b"60,real_user@example.com\n")
     mem_store.put_bytes("staging", "late_sensitive.csv", b"".join(lines))
 
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "late_sensitive.csv"),
         destination_bucket="snapshots",
         destination_prefix="late_sens",
@@ -408,7 +426,7 @@ def test_import_respects_privacy_columns_policy(
     mem_store: InMemoryObjectStore, import_adapter: TabularImportAdapter
 ) -> None:
     mem_store.put_bytes("staging", "policy.csv", b"id,custom_note\n1,some notes\n2,more notes\n")
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "policy.csv"),
         destination_bucket="snapshots",
         destination_prefix="policy",
@@ -427,7 +445,7 @@ def test_nested_leaf_sensitive_masks_entire_container_in_preview(
         b'{"id": "2", "data": {"user": {"email": null}}}\n'
     )
     mem_store.put_bytes("staging", "nested_sens.jsonl", jsonl_data)
-    inspection = import_adapter.inspect_and_normalize(
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", 
         source=ObjectRef("staging", "nested_sens.jsonl"),
         destination_bucket="snapshots",
         destination_prefix="nested_sens",
@@ -436,3 +454,173 @@ def test_nested_leaf_sensitive_masks_entire_container_in_preview(
     assert "data" in inspection.sensitive_scan["sensitive_columns"]
     # Entire container must be masked to avoid leak via parent JSON
     assert inspection.preview_rows[0]["data"] == "[REDACTED]"
+
+
+@pytest.mark.parametrize(('data', 'mixed'), [
+    (b'{"a":1}\n{"b":2}\n', False),
+    (b'{"a":1}\n{"a":null,"b":2}\n', True),
+])
+def test_jsonl_absent_keys_do_not_count_as_observed_null(mem_store, import_adapter, data, mixed):
+    mem_store.put_bytes('staging', 'sparse.jsonl', data)
+    inspection = import_adapter.inspect_snapshot(source_store=mem_store, storage_mode="OWNED_RAW", source=ObjectRef('staging', 'sparse.jsonl'),
+        destination_bucket='snapshots', destination_prefix='sparse', file_format='JSONL')
+    assert ('MIXED_SCALAR_TYPES' in inspection.warnings) is mixed
+
+
+# ---------------------------------------------------------------------------
+# Raw-only snapshot contract
+# ---------------------------------------------------------------------------
+
+
+def _kwargs(**extra: Any) -> dict[str, Any]:
+    return {"destination_bucket": "snapshots", "destination_prefix": "snapshots/t/u", "file_format": "CSV", **extra}
+
+
+def test_inspection_has_no_canonical_artifacts(mem_store, import_adapter):
+    mem_store.put_bytes("staging", "a.csv", b"id\n1\n")
+    inspection = import_adapter.inspect_snapshot(
+        source=ObjectRef("staging", "a.csv"), source_store=mem_store, storage_mode="OWNED_RAW", **_kwargs())
+    assert inspection.storage_mode == "OWNED_RAW"
+    assert inspection.normalization.format == "CSV"
+    assert inspection.normalization_version == inspection.normalization.version
+    assert inspection.raw_ref.key == "snapshots/t/u/source.csv"
+    assert not any(key.endswith("canonical.parquet") for _, key in mem_store.files)
+
+
+def test_reuse_owned_pins_existing_raw_without_copy(mem_store, import_adapter):
+    mem_store.put_bytes("snapshots", "snapshots/t/u/source.csv", b"id\n1\n")
+    inspection = import_adapter.inspect_snapshot(
+        source=ObjectRef("snapshots", "snapshots/t/u/source.csv", "v9"), source_store=mem_store,
+        storage_mode="OWNED_RAW", reuse_owned=True, **_kwargs())
+    assert mem_store.copies == []
+    assert inspection.raw_ref == ObjectRef("snapshots", "snapshots/t/u/source.csv", "v9")
+    assert inspection.exact_row_count == 1
+
+
+def test_external_version_reads_pinned_source_and_never_writes(mem_store, import_adapter):
+    external = InMemoryObjectStore()
+    external.put_bytes("shared", "t/a.csv", b"id,v\n1,x\n2,y\n")
+    inspection = import_adapter.inspect_snapshot(
+        source=ObjectRef("shared", "t/a.csv", "ext-v1"), source_store=external, storage_mode="EXTERNAL_VERSION",
+        source_id="shared", **_kwargs())
+    assert inspection.raw_ref == ObjectRef("shared", "t/a.csv", "ext-v1")
+    assert inspection.exact_row_count == 2
+    assert mem_store.files == {} and mem_store.copies == []
+
+
+def test_external_requires_pinned_version(mem_store, import_adapter):
+    external = InMemoryObjectStore()
+    external.put_bytes("shared", "a.csv", b"id\n1\n")
+    with pytest.raises(ImportInspectionException) as exc:
+        import_adapter.inspect_snapshot(
+            source=ObjectRef("shared", "a.csv"), source_store=external, storage_mode="EXTERNAL_VERSION",
+            source_id="shared", **_kwargs())
+    assert exc.value.error_code == "STORAGE_VIOLATION"
+
+
+def test_shared_source_never_uses_owned_client(mem_store, import_adapter):
+    mem_store.put_bytes("shared", "a.csv", b"id\n1\n")
+    with pytest.raises(ImportInspectionException) as exc:
+        import_adapter.inspect_snapshot(
+            source=ObjectRef("shared", "a.csv"), source_store=mem_store, storage_mode="OWNED_RAW",
+            source_id="shared", **_kwargs())
+    assert exc.value.error_code == "STORAGE_VIOLATION"
+    assert mem_store.copies == []
+
+
+def test_shared_unversioned_fallback_streams_with_if_match_through_owned_multipart(mem_store, import_adapter):
+    shared = InMemoryObjectStore()
+    shared.put_bytes("shared", "t/a.csv", b"id,v\n1,x\n")
+    inspection = import_adapter.inspect_snapshot(
+        source=ObjectRef("shared", "t/a.csv"), source_store=shared, storage_mode="OWNED_RAW",
+        source_id="shared", **_kwargs())
+    assert (ObjectRef("shared", "t/a.csv"), "mock-etag") in shared.stream_calls
+    assert shared.copies == [] and mem_store.copies == []
+    assert mem_store.files[("snapshots", "snapshots/t/u/source.csv")] == b"id,v\n1,x\n"
+    assert inspection.raw_ref.bucket == "snapshots"
+
+
+def test_multipart_aborted_when_streaming_fails(mem_store, import_adapter):
+    shared = InMemoryObjectStore()
+    shared.put_bytes("shared", "a.csv", b"id\n1\n")
+
+    def broken(*args, **kwargs):
+        raise OSError("upload failed")
+
+    mem_store.upload_part = broken  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="upload failed"):
+        import_adapter.inspect_snapshot(
+            source=ObjectRef("shared", "a.csv"), source_store=shared, storage_mode="OWNED_RAW",
+            source_id="shared", **_kwargs())
+    assert mem_store.aborted == ["mp-snapshots-snapshots/t/u/source.csv"]
+
+
+def test_multipart_abort_failure_does_not_mask_original_error(mem_store, import_adapter):
+    shared = InMemoryObjectStore()
+    shared.put_bytes("shared", "a.csv", b"id\n1\n")
+
+    def broken(*args, **kwargs):
+        raise OSError("upload failed")
+
+    def abort_broken(*args, **kwargs):
+        raise RuntimeError("abort failed")
+
+    mem_store.upload_part = broken  # type: ignore[method-assign]
+    mem_store.abort_multipart = abort_broken  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="upload failed"):
+        import_adapter.inspect_snapshot(
+            source=ObjectRef("shared", "a.csv"), source_store=shared, storage_mode="OWNED_RAW",
+            source_id="shared", **_kwargs())
+
+
+def test_rejection_after_freeze_exposes_frozen_raw_ref(mem_store, import_adapter):
+    mem_store.put_bytes("staging", "dup.csv", b"a,a\n1,2\n")
+    with pytest.raises(ImportInspectionException) as exc:
+        import_adapter.inspect_snapshot(
+            source=ObjectRef("staging", "dup.csv"), source_store=mem_store, storage_mode="OWNED_RAW", **_kwargs())
+    assert exc.value.error_code == "DUPLICATE_COLUMN_NAME"
+    assert exc.value.raw_ref == ObjectRef("snapshots", "snapshots/t/u/source.csv", "v1")
+
+
+def test_parquet_inspected_through_pinned_reader_and_replays_values(mem_store, import_adapter):
+    sink = io.BytesIO()
+    pq.write_table(pa.table({"id": [1, 2], "name": ["a", None]}), sink)
+    mem_store.put_bytes("staging", "p.parquet", sink.getvalue())
+    inspection = import_adapter.inspect_snapshot(
+        source=ObjectRef("staging", "p.parquet"), source_store=mem_store, storage_mode="OWNED_RAW",
+        **_kwargs(file_format="PARQUET"))
+    assert inspection.raw_size_bytes == len(sink.getvalue())
+    assert _read_rows(mem_store, inspection) == [{"id": "1", "name": "a"}, {"id": "2", "name": None}]
+
+
+def test_raw_sha256_covers_full_object(mem_store, import_adapter):
+    import hashlib
+    data = b"id\n" + b"x\n" * 700_000
+    mem_store.put_bytes("staging", "big.csv", data)
+    inspection = import_adapter.inspect_snapshot(
+        source=ObjectRef("staging", "big.csv"), source_store=mem_store, storage_mode="OWNED_RAW", **_kwargs())
+    assert inspection.raw_sha256 == hashlib.sha256(data).hexdigest()
+    assert inspection.exact_row_count == 700_000
+    assert len(inspection.profile["columns"]) == 1
+
+
+def test_source_changed_before_complete_aborts_multipart(mem_store, import_adapter):
+    shared = InMemoryObjectStore()
+    shared.put_bytes("shared", "a.csv", b"id\n1\n")
+    heads = [0]
+    original = shared.head
+
+    def mutating(ref):
+        heads[0] += 1
+        meta = original(ref)
+        return meta if heads[0] == 1 else type(meta)(ref=ref, size_bytes=meta.size_bytes, etag="changed")
+
+    shared.head = mutating  # type: ignore[method-assign]
+    completed: list[str] = []
+    mem_store.complete_multipart = lambda *a, **k: completed.append("x")  # type: ignore[method-assign]
+    with pytest.raises(ImportInspectionException) as exc:
+        import_adapter.inspect_snapshot(
+            source=ObjectRef("shared", "a.csv"), source_store=shared, storage_mode="OWNED_RAW",
+            source_id="shared", **_kwargs())
+    assert exc.value.error_code == "OBJECT_CHANGED"
+    assert completed == [] and mem_store.aborted

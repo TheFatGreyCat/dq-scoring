@@ -9,6 +9,7 @@ import pytest
 from dq_scoring.adapters.queue.in_memory_queue import InMemoryQueueAdapter
 from dq_scoring.core.entities import RunStatus
 from dq_scoring.core.exceptions import RunAbortedError
+from tests.support.run_seed import synthetic_full_profile
 from tests.unit.services.test_evaluation_orchestrator import _create_setup
 
 
@@ -32,6 +33,7 @@ def _failing_run(exc: Exception) -> str | None:
 
     compute.execute_rules = boom  # type: ignore[method-assign]
     orchestrator = EvaluationOrchestrator(compute, store, queue)
+    queue.set_profile_ready(spec.snapshot, synthetic_full_profile(spec.snapshot))
     queue.enqueue_run(spec, idempotency_key="k")
     leased = queue.claim_next_run("w")
     with pytest.raises(type(exc)):

@@ -56,3 +56,36 @@ class AiRecommendationRequest(BaseModel):
     engine: Literal["LLM", "HYBRID"]
     domain: Literal["FINANCE", "RETAIL", "HEALTHCARE", "TRANSPORTATION", "GENERAL"] = "GENERAL"
     priorities: list[Literal["COMPLETENESS", "VALIDITY", "UNIQUENESS"]] = Field(min_length=1, max_length=3)
+    profile_mode: Literal["SAMPLE", "FULL"] = "SAMPLE"
+
+
+SemanticLabelName = Literal[
+    "UNKNOWN", "IDENTIFIER", "CATEGORY", "FREE_TEXT", "QUANTITY", "MONEY",
+    "DATE_TIME", "EMAIL", "PHONE", "ADDRESS", "PERSON_NAME", "BOOLEAN",
+]
+
+
+class SemanticInferRequest(BaseModel):
+    """Explicit inference against ONE provider; endpoints and models are operator-owned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["LOCAL", "API"]
+    profile_mode: Literal["SAMPLE", "FULL"] = "SAMPLE"
+
+
+class SemanticChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    column: str = Field(min_length=1, max_length=1024)
+    label: SemanticLabelName | None = None
+
+
+class SemanticConfirmRequest(BaseModel):
+    """Batch confirm (label) or reset (label null) under optimistic concurrency."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=500, pattern=r"\S")
+    changes: list[SemanticChange] = Field(min_length=1, max_length=1000)

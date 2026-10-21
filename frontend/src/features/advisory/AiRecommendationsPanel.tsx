@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Bot } from "lucide-react";
 import { useState } from "react";
 import { createAiRecommendations } from "../../api/endpoints";
-import type { AiEngine, AiPriority, AiRecommendations, QualityRuleInput } from "../../api/types";
+import type { AiEngine, AiPriority, AiRecommendations, ProfileMode, QualityRuleInput } from "../../api/types";
 import { ProblemAlert } from "../../components/ProblemAlert";
 import { formatTimestamp } from "../../lib/format";
 import { useI18n } from "../../lib/i18n";
@@ -20,14 +20,21 @@ export function AiRecommendationsPanel({ snapshotId, onMerge }: { snapshotId: st
   const { canGenerate, model } = useAiGeneration("recommendations");
   const [engine, setEngine] = useState<AiEngine>("HYBRID");
   const [priorities, setPriorities] = useState<AiPriority[]>(PRIORITIES);
+  const [profileMode, setProfileMode] = useState<ProfileMode>("SAMPLE");
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const mutation = useMutation({
-    mutationFn: () => createAiRecommendations(snapshotId, { engine, domain: "GENERAL", priorities }),
+    mutationFn: () => createAiRecommendations(snapshotId, { engine, domain: "GENERAL", priorities, profile_mode: profileMode }),
     onMutate: () => setSelected(new Set()),
   });
 
   if (!canGenerate) return null;
+
+  const changeMode = (mode: ProfileMode) => {
+    mutation.reset();
+    setSelected(new Set());
+    setProfileMode(mode);
+  };
 
   const result: AiRecommendations | undefined = mutation.data;
   const toggle = (i: number, on: boolean) =>
@@ -55,6 +62,13 @@ export function AiRecommendationsPanel({ snapshotId, onMerge }: { snapshotId: st
           <select className="input" value={engine} onChange={(e) => setEngine(e.target.value as AiEngine)}>
             <option value="HYBRID">{t("ai.rec.engine_hybrid")}</option>
             <option value="LLM">{t("ai.rec.engine_llm")}</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="block font-medium">{t("ai.rec.profile_mode")}</span>
+          <select className="input" value={profileMode} onChange={(e) => changeMode(e.target.value as ProfileMode)}>
+            <option value="SAMPLE">{t("ai.rec.mode.SAMPLE")}</option>
+            <option value="FULL">{t("ai.rec.mode.FULL")}</option>
           </select>
         </label>
         <fieldset className="space-y-1">

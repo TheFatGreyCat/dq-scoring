@@ -9,8 +9,12 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.types.json import Jsonb
 
+from dq_scoring.adapters.db.postgres_import_store import PostgresImportStore
+from dq_scoring.adapters.storage.normalized_snapshot import validate_descriptor
+from dq_scoring.common.hash_utils import compute_deterministic_hash
 from dq_scoring.common.privacy import generate_finding_id
 from dq_scoring.core.entities import DatasetSnapshot
+from dq_scoring.services.snapshot_profile_service import ensure_full_profile
 
 
 class ImportRegistrationError(Exception):
@@ -35,6 +39,7 @@ class DatasetImportService:
         acknowledged_warnings: list[str],
     ) -> DatasetSnapshot:
         now = datetime.now(UTC)
+        PostgresImportStore.lock_tenant_storage(conn, tenant_id)
 
         with conn.cursor() as cur:
             # 1. Lock and retrieve upload session
@@ -101,8 +106,12 @@ class DatasetImportService:
             columns = manifest.get("columns") or []
             total_rows = int(manifest.get("exact_row_count") or 0)
             raw_sha256 = source_desc.get("content_sha256")
-            canonical_info = source_desc.get("canonical", {})
-            storage_loc = canonical_info.get("s3a_uri") or f"s3a://{canonical_info.get('bucket')}/{canonical_info.get('key')}"
+            canonical_info = source_desc.get('canonical', {})
+            if source_desc.get('descriptor_version') == 2:
+                validate_descriptor(source_desc)
+                storage_loc = f"s3a://{source_desc['bucket']}/{source_desc['key']}"
+            else:
+                storage_loc = canonical_info.get('s3a_uri') or f"s3a://{canonical_info.get('bucket')}/{canonical_info.get('key')}"
 
             # 2. Resolve or create asset
             if asset_id is None:
@@ -150,8 +159,20 @@ class DatasetImportService:
             existing_snap = cur.fetchone()
             if existing_snap:
                 existing_desc = existing_snap[1]
-                if existing_desc.get("canonical", {}).get("content_sha256") == canonical_info.get("content_sha256"):
-                    # Same raw hash + same canonical hash -> return existing snapshot idempotently
+                if source_desc.get('descriptor_version') == 2:
+                    if existing_desc.get('descriptor_version') == 2:
+                        equivalent = existing_desc.get('normalization') == source_desc['normalization']
+                    else:
+                        witness = manifest.get('legacy_equivalence') or {}
+                        valid_witness = (witness.get('snapshot_id') == str(existing_snap[0])
+                            and witness.get('descriptor_sha256') == compute_deterministic_hash(existing_desc)
+                            and witness.get('normalization_sha256') == compute_deterministic_hash(source_desc['normalization']))
+                        if not valid_witness:
+                            raise ImportRegistrationError('IMPORT_REVERIFY_REQUIRED', 'Reconfigure the same mapping to verify historical equivalence.')
+                        equivalent = witness.get('equal') is True
+                else:
+                    equivalent = existing_desc.get('canonical', {}).get('content_sha256') == canonical_info.get('content_sha256')
+                if equivalent:
                     cur.execute(
                         """
                         UPDATE dataset_upload_sessions
@@ -173,6 +194,7 @@ class DatasetImportService:
                         (existing_snap[0], tenant_id),
                     )
                     s_row = cur.fetchone()
+                    ensure_full_profile(conn, tenant_id, s_row[0], user_id)
                     return DatasetSnapshot(
                         snapshot_id=s_row[0],
                         tenant_id=s_row[1],
@@ -293,6 +315,7 @@ class DatasetImportService:
                 (asset_id, snapshot_id, upload_id, tenant_id),
             )
 
+            ensure_full_profile(conn, tenant_id, snap_row[0], user_id)
             return DatasetSnapshot(
                 snapshot_id=snap_row[0],
                 tenant_id=snap_row[1],

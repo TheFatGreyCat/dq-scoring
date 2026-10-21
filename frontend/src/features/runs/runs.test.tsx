@@ -74,6 +74,7 @@ describe("run wizard", () => {
         if (++attempts === 1) throw new TypeError("Failed to fetch");
         return json(202, { run_id: RUN_ID, snapshot_id: ids.snapshot, status: "QUEUED" });
       }
+      if (path.endsWith(`/snapshots/${ids.snapshot}/profile`)) return json(200, { state: "COMPLETE", current: true, stale: false, result: null });
       if (path.endsWith(`/snapshots/${ids.snapshot}`)) return json(200, { snapshot_id: ids.snapshot, asset_id: "asset", schema_definition: { columns: [] } });
       if (path.endsWith("/rulesets")) return json(200, page([{ ruleset_id: ids.ruleset, name: "Approved rules", status: "ACTIVE" }]));
       if (path.endsWith("/policies")) return json(200, page([{ policy_id: ids.policy, name: "Approved policy", status: "ACTIVE" }]));
@@ -93,5 +94,61 @@ describe("run wizard", () => {
     const keys = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(init.body).idempotency_key);
     expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
+  });
+
+  it("blocks submit and links to the snapshot until the FULL profile is COMPLETE and current", async () => {
+    const page = (items: unknown[]) => ({ items, total: items.length, page: 1, page_size: 100 });
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/profile")) return json(200, { state: "RUNNING", current: true, stale: false, result: null });
+      if (path.endsWith(`/snapshots/${ids.snapshot}`)) return json(200, { snapshot_id: ids.snapshot, asset_id: "asset", schema_definition: { columns: [] } });
+      return json(200, page([]));
+    });
+    renderRoute(<RunWizardPage />, "/runs/new", `/runs/new?snapshot=${ids.snapshot}`);
+    const link = await screen.findByRole("link", { name: /snapshot/i });
+    expect(link).toHaveAttribute("href", `/snapshots/${ids.snapshot}`);
+    expect(screen.getByRole("button", { name: /trigger evaluation/i })).toBeDisabled();
+  });
+
+  it("re-reads FULL readiness while it is running and stops once COMPLETE", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const page = (items: unknown[]) => ({ items, total: items.length, page: 1, page_size: 100 });
+    let state = "RUNNING";
+    let profileReads = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (path.endsWith("/profile")) { profileReads += 1; return json(200, { state, current: true, stale: false, result: null }); }
+      if (path.endsWith(`/snapshots/${ids.snapshot}`)) return json(200, { snapshot_id: ids.snapshot, asset_id: "asset", schema_definition: { columns: [] } });
+      return json(200, page([]));
+    });
+    renderRoute(<RunWizardPage />, "/runs/new", `/runs/new?snapshot=${ids.snapshot}`);
+    await screen.findByRole("link", { name: /snapshot/i });
+    state = "COMPLETE";
+    await vi.advanceTimersByTimeAsync(3500);
+    await waitFor(() => expect(screen.queryByRole("link", { name: /snapshot/i })).not.toBeInTheDocument());
+    const settled = profileReads;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(profileReads).toBe(settled);
+    vi.useRealTimers();
+  });
+
+  it("renders API 409 FULL_PROFILE_REQUIRED even when the UI believed the profile was ready", async () => {
+    const user = userEvent.setup();
+    const page = (items: unknown[]) => ({ items, total: items.length, page: 1, page_size: 100 });
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(url, "http://localhost").pathname;
+      if (init?.method === "POST") return json(409, { status: 409, title: "Conflict", error_code: "FULL_PROFILE_REQUIRED" });
+      if (path.endsWith("/profile")) return json(200, { state: "COMPLETE", current: true, stale: false, result: null });
+      if (path.endsWith(`/snapshots/${ids.snapshot}`)) return json(200, { snapshot_id: ids.snapshot, asset_id: "asset", schema_definition: { columns: [] } });
+      if (path.endsWith("/rulesets")) return json(200, page([{ ruleset_id: ids.ruleset, name: "Approved rules", status: "ACTIVE" }]));
+      if (path.endsWith("/policies")) return json(200, page([{ policy_id: ids.policy, name: "Approved policy", status: "ACTIVE" }]));
+      return json(200, page([]));
+    });
+    renderRoute(<RunWizardPage />, "/runs/new", `/runs/new?snapshot=${ids.snapshot}`);
+    await screen.findByRole("option", { name: "Approved rules" });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Rulesets" }), ids.ruleset);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Policies" }), ids.policy);
+    await user.click(screen.getByRole("button", { name: /trigger evaluation/i }));
+    expect(await screen.findByRole("link", { name: /snapshot/i })).toHaveAttribute("href", `/snapshots/${ids.snapshot}`);
   });
 });

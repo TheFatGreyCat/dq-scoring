@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 from typing import Any
@@ -12,22 +13,37 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
+from dq_scoring.adapters.compute.normalized_source import (
+    OPTION_NAME as SOURCE_OPTION,
+)
+from dq_scoring.adapters.compute.normalized_source import (
+    SOURCE_NAME,
+    NormalizedSnapshotSource,
+    snapshot_options,
+    snapshot_run_error,
+)
 from dq_scoring.adapters.compute.spark_settings import SparkSettings
 from dq_scoring.adapters.compute.sql_rule_compiler import (
+    DEFAULT_TIMESTAMP_FORMAT,
     CompiledRule,
+    _is_missing,
+    _parse,
     compile_rule,
     quoted_col,
 )
+from dq_scoring.adapters.storage.normalized_snapshot import resolve_snapshot_source
 from dq_scoring.adapters.storage.s3_object_store import S3ObjectStoreAdapter
 from dq_scoring.adapters.storage.s3_settings import S3Settings, get_s3_settings
 from dq_scoring.adapters.storage.snapshot_objects import (
     SnapshotObjectError,
     pinned_ref,
     verify_object,
+    verify_pinned_object,
 )
+from dq_scoring.adapters.storage.source_settings import get_source_settings
+from dq_scoring.common.profiling import PROFILER_VERSION, ColumnProfile, SnapshotProfile
 from dq_scoring.common.protected_transport import is_protected_processing_enabled
 from dq_scoring.core.entities import (
-    CanonicalMetric,
     DatasetSnapshot,
     OutlierExecutionOutput,
     QualityRule,
@@ -53,6 +69,35 @@ def _ensure_jdk_configured() -> None:
         bin_dir = str(local_jdk / "bin")
         if bin_dir not in path_env:
             os.environ["PATH"] = f"{bin_dir}{os.pathsep}{path_env}"
+
+
+def _task_errors(method):
+    """Map wrapped Spark/Python task failures carrying the fixed snapshot prefix to RunAbortedError."""
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except RunAbortedError:
+            raise
+        except Exception as exc:
+            mapped = snapshot_run_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from None
+    return wrapper
+
+
+def _profile_storage_codes(method):
+    """FULL profile failures use the stored-profile code set: missing resource is STORAGE_UNAVAILABLE."""
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except RunAbortedError as exc:
+            if str(exc).startswith(("RESOURCE_NOT_FOUND:",)):
+                raise RunAbortedError("STORAGE_UNAVAILABLE: Snapshot storage is unavailable.") from None
+            raise
+    return wrapper
 
 
 class PySparkComputeAdapter(IComputeEnginePort):
@@ -159,9 +204,26 @@ class PySparkComputeAdapter(IComputeEnginePort):
         except SnapshotObjectError as exc:
             raise RunAbortedError(str(exc)) from exc
 
+    def _is_v2(self, snapshot: DatasetSnapshot) -> bool:
+        return isinstance(snapshot.source_descriptor, dict) and "descriptor_version" in snapshot.source_descriptor
+
+    def _verify_v2(self, snapshot: DatasetSnapshot) -> None:
+        """Exact-version full SHA on every call; v2 never uses the legacy verified cache."""
+        descriptor = snapshot.source_descriptor
+        try:
+            store, ref, _ = resolve_snapshot_source(
+                snapshot.tenant_id, descriptor, self._store, self._s3_settings, get_source_settings(),
+            )
+            verify_pinned_object(store, ref, descriptor, full=True)
+        except SnapshotObjectError as exc:
+            raise RunAbortedError(str(exc)) from exc
+
     def verify_snapshot(self, snapshot: DatasetSnapshot) -> None:
         if snapshot.source_kind != "OBJECT_FILE":
             raise RunAbortedError("LEGACY_SOURCE_UNSUPPORTED: Import this snapshot into object storage.")
+        if self._is_v2(snapshot):
+            self._verify_v2(snapshot)
+            return
         raw = snapshot.source_descriptor
         canonical = raw.get("canonical")
         if not isinstance(canonical, dict) or canonical.get("format") != "PARQUET":
@@ -177,37 +239,72 @@ class PySparkComputeAdapter(IComputeEnginePort):
 
     def _load_df(self, snapshot: DatasetSnapshot) -> DataFrame:
         self.verify_snapshot(snapshot)
+        if self._is_v2(snapshot):
+            if not getattr(self._spark, '_dq_snapshot_registered', False):
+                self._spark.dataSource.register(NormalizedSnapshotSource)
+                self._spark._dq_snapshot_registered = True
+            return (
+                self._spark.read.format(SOURCE_NAME)
+                .option(SOURCE_OPTION, snapshot_options(snapshot.tenant_id, snapshot.source_descriptor))
+                .load()
+            )
         canonical = snapshot.source_descriptor["canonical"]
         uri = f"s3a://{canonical['bucket']}/{quote(canonical['key'], safe='/')}"
         return self._spark.read.parquet(uri)
 
+    @_profile_storage_codes
+    @_task_errors
     def profile_snapshot(
-        self, snapshot: DatasetSnapshot, columns: list[str]
-    ) -> list[CanonicalMetric]:
-        """Compute single-pass canonical profiling metrics for columns."""
-        if snapshot.total_rows == 0:
-            return [
-                CanonicalMetric(metric_name="row_count", column_name=c, metric_value=0)
-                for c in columns
-            ]
+        self, snapshot: DatasetSnapshot, *, profile_id: UUID, fingerprint: str,
+    ) -> SnapshotProfile:
+        """Exact root-column aggregates, bounded to 32 columns per Spark action."""
+        from datetime import UTC, datetime
+
         df = self._load_df(snapshot)
-        metrics: list[CanonicalMetric] = []
-        for col in columns:
-            if col not in df.columns:
-                continue
-            agg_row = df.select(
-                F.count(F.lit(1)).alias("row_count"),
-                F.count(F.when(F.col(col).isNull() | (F.trim(F.col(col)) == ""), 1)).alias("null_count"),
-                F.approx_count_distinct(F.col(col)).alias("distinct_count"),
-            ).collect()[0]
-            metrics.extend([
-                CanonicalMetric(metric_name="row_count", column_name=col, metric_value=agg_row["row_count"]),
-                CanonicalMetric(metric_name="null_count", column_name=col, metric_value=agg_row["null_count"]),
-                CanonicalMetric(metric_name="distinct_count", column_name=col, metric_value=agg_row["distinct_count"]),
-            ])
-        return metrics
+        definitions = snapshot.schema_definition.get("columns", [])
+        definitions = [{"name": c, "type": "STRING"} if isinstance(c, str) else c for c in definitions]
+        if df.columns != [c["name"] for c in definitions] or len(definitions) != snapshot.total_columns:
+            raise RunAbortedError("PROFILE_SCHEMA_MISMATCH")
+        if any(field.dataType.simpleString() != "string" for field in df.schema.fields):
+            raise RunAbortedError("PROFILE_SCHEMA_MISMATCH")
+        profiles = []
+        total = None
+        for start in range(0, max(1, len(definitions)), 32):
+            batch = definitions[start:start + 32]
+            expressions = [F.count(F.lit(1)).alias("rows")]
+            for index, definition in enumerate(batch):
+                name = definition["name"]
+                missing = _is_missing(name)
+                expressions.extend([
+                    F.count(F.when(missing, 1)).alias(f"n{index}"),
+                    F.count_distinct(F.when(~missing, quoted_col(name))).alias(f"d{index}"),
+                ])
+                target = definition.get("parse_target")
+                if target in ("INTEGER", "DOUBLE", "DATE", "TIMESTAMP"):
+                    parsed = _parse(name, target, definition.get("parse_format") or DEFAULT_TIMESTAMP_FORMAT)
+                    expressions.append(F.count(F.when((~missing) & parsed.isNotNull(), 1)).alias(f"p{index}"))
+            aggregate = df.select(*expressions).collect()[0]
+            if aggregate["rows"] != snapshot.total_rows or (total is not None and total != aggregate["rows"]):
+                raise RunAbortedError("PROFILE_ROW_COUNT_MISMATCH")
+            total = aggregate["rows"]
+            for index, definition in enumerate(batch):
+                target = definition.get("parse_target")
+                supported = target in ("INTEGER", "DOUBLE", "DATE", "TIMESTAMP")
+                profiles.append(ColumnProfile(
+                    name=definition["name"], technical_type=definition.get("type", "STRING").upper(),
+                    null_count=aggregate[f"n{index}"], non_null_count=total - aggregate[f"n{index}"],
+                    distinct_count=aggregate[f"d{index}"], parse_target=target,
+                    parse_format=definition.get("parse_format"),
+                    parse_success_count=aggregate[f"p{index}"] if supported else None,
+                    parse_reason=None if supported else ("NO_EXPLICIT_TARGET" if target is None else "UNSUPPORTED_TYPE"),
+                ))
+        self.verify_snapshot(snapshot)
+        return SnapshotProfile(mode="FULL", profiler_version=PROFILER_VERSION, profile_id=profile_id,
+            fingerprint=fingerprint, generated_at=datetime.now(UTC), total_rows=total or 0,
+            scanned_rows=total or 0, is_sample=False, sampling_method="EXACT", columns=tuple(profiles))
 
 
+    @_task_errors
     def execute_rules(
         self,
         snapshot: DatasetSnapshot,
@@ -358,7 +455,9 @@ class PySparkComputeAdapter(IComputeEnginePort):
                         .collect()
                     )
                     evidence_samples = [row.asDict() for row in raw_samples]
-                except Exception:  # noqa: BLE001
+                except Exception as exc:
+                    if snapshot_run_error(exc) is not None:
+                        raise
                     evidence_samples = []
 
             results.append(
@@ -381,6 +480,7 @@ class PySparkComputeAdapter(IComputeEnginePort):
             error_message=message,
         )
 
+    @_task_errors
     def detect_outliers(
         self,
         snapshot: DatasetSnapshot,

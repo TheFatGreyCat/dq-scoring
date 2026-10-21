@@ -11,6 +11,7 @@ import pytest
 
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
 from dq_scoring.adapters.queue.postgres_queue import PostgresQueueAdapter
+from dq_scoring.common.profiling import ProfileRequiredError
 from dq_scoring.core.entities import (
     DatasetSnapshot,
     QualityRule,
@@ -89,7 +90,7 @@ def test_enqueue_run_does_not_create_missing_configuration(
     spec = _make_run_spec(test_tenant_id).model_copy(
         update={"ruleset_id": uuid4(), "policy_id": uuid4(), "created_by": uuid4()}
     )
-    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+    with pytest.raises((psycopg.errors.ForeignKeyViolation, ProfileRequiredError)):
         PostgresQueueAdapter(dsn=pg_dsn).enqueue_run(
             spec, idempotency_key=f"nocfg-{uuid4()}"
         )

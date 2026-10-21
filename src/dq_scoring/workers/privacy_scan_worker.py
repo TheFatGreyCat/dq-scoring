@@ -1,4 +1,4 @@
-"""Privacy scan worker: claims jobs, scans the pinned canonical Parquet, publishes fenced results.
+"""Privacy scan worker: scans pinned normalized batches and publishes fenced results.
 
 Connection contract: callers pass an *autocommit* connection (as ImportDaemon does). Every DB step runs in its own
 short `conn.transaction()`; object I/O and scanning happen with no open transaction. Heartbeats must use their own
@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
-import pyarrow.parquet as pq
 from psycopg.types.json import Jsonb
 from pyarrow import ArrowException
 from pydantic import ValidationError
 
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
+from dq_scoring.adapters.source.tabular_normalization import ImportInspectionException
+from dq_scoring.adapters.storage.normalized_snapshot import (
+    open_normalized_snapshot,
+    resolve_snapshot_source,
+)
 from dq_scoring.adapters.storage.s3_settings import (
     ImportSettings,
     S3Settings,
@@ -30,8 +31,9 @@ from dq_scoring.adapters.storage.s3_settings import (
 )
 from dq_scoring.adapters.storage.snapshot_objects import (
     SnapshotObjectError,
-    spool_canonical,
+    verify_pinned_object,
 )
+from dq_scoring.adapters.storage.source_settings import get_source_settings
 from dq_scoring.common.privacy import (
     PrivacyScanLimitExceededException,
     PrivacyScanner,
@@ -47,7 +49,6 @@ from dq_scoring.ports.object_store import IObjectStorePort
 logger = logging.getLogger("dq_scoring.workers.privacy_scan_worker")
 
 MAX_ATTEMPTS = 3
-BATCH_ROWS = 1000
 MAX_SUMMARY_BYTES = 500 * 1024
 _TRANSIENT_CODES = frozenset({"STORAGE_UNAVAILABLE", "PRIVACY_SCAN_FAILED"})
 _OBJECT_CODE_MAP = {
@@ -206,26 +207,26 @@ class PrivacyScanWorker:
         except (ValidationError, InvalidPrivacyPattern, ValueError, TypeError, KeyError):
             raise _ScanFailure("PRIVACY_RULE_INVALID") from None
 
-        root = Path(self.settings.temp_root)
-        os.makedirs(root, exist_ok=True)
         try:
-            with tempfile.TemporaryDirectory(dir=root, prefix="privacy-scan-") as workdir:
-                spool = Path(workdir) / "canonical.parquet"
-                spool_canonical(self.store, job["tenant_id"], source_descriptor, self.s3_settings.bucket_snapshots, spool)
-                parquet = pq.ParquetFile(spool)
-                if not set(names) <= set(parquet.schema_arrow.names):
-                    raise _ScanFailure("SNAPSHOT_REIMPORT_REQUIRED")
-                for batch in parquet.iter_batches(batch_size=BATCH_ROWS, columns=names):
+            with open_normalized_snapshot(job['tenant_id'], source_descriptor, self.store, self.s3_settings,
+                                          source_settings=get_source_settings()) as batches:
+                for batch in batches:
+                    if not set(names) <= set(batch.schema.names):
+                        raise _ScanFailure('SNAPSHOT_REIMPORT_REQUIRED')
                     for row in batch.to_pylist():
                         for name in structured:
                             if isinstance(row.get(name), str):
                                 row[name] = parse_structured_json(row[name])
-                        scanner.feed_row(row)
+                        scanner.feed_row({name: row[name] for name in names})
+            if source_descriptor.get('descriptor_version') == 2:
+                store, ref, _ = resolve_snapshot_source(job['tenant_id'], source_descriptor, self.store,
+                    self.s3_settings, get_source_settings())
+                verify_pinned_object(store, ref, source_descriptor, full=True)
         except SnapshotObjectError as error:
             raise _ScanFailure(_OBJECT_CODE_MAP.get(error.code, "SNAPSHOT_REIMPORT_REQUIRED")) from None
         except PrivacyScanLimitExceededException:
             raise _ScanFailure("PRIVACY_SCAN_LIMIT_EXCEEDED") from None
-        except (ArrowException, StructuredParsingError):
+        except (ArrowException, StructuredParsingError, ImportInspectionException):
             raise _ScanFailure("SNAPSHOT_REIMPORT_REQUIRED") from None
 
         result = scanner.finish()

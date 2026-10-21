@@ -26,6 +26,11 @@ from dq_scoring.adapters.storage.s3_settings import (
     get_import_settings,
     get_s3_settings,
 )
+from dq_scoring.adapters.storage.source_settings import (
+    SourceStoreSettings,
+    get_source_settings,
+    source_binding_sha256,
+)
 from dq_scoring.ports.object_store import IObjectStorePort, ObjectRef, UploadedPart
 from dq_scoring.presentation.api.auth import AuthenticatedUser
 from dq_scoring.presentation.api.dependencies import get_current_user, get_db_connection
@@ -73,6 +78,37 @@ def _check_import_role(user: AuthenticatedUser) -> None:
 def _get_storage_adapter(settings: S3Settings = Depends(get_s3_settings)) -> IObjectStorePort:
     return S3ObjectStoreAdapter(settings=settings)
 
+
+def _source_not_found() -> JSONResponse:
+    return create_problem_response(
+        status_code=404,
+        title="Not Found",
+        detail="Source object not found in this workspace.",
+        extensions={"error_code": "RESOURCE_NOT_FOUND"},
+    )
+
+
+def _upload_target(session: dict[str, Any], tenant_id: UUID, s3_settings: S3Settings) -> tuple[str, str] | None:
+    """Bucket/key of the in-flight multipart object, validated against the session's manifest layout."""
+    manifest = session.get("manifest") or {}
+    key = session["staging_key"]
+    prefix = f"{tenant_id}/{session['upload_id']}/source."
+    if manifest.get("upload_layout_version") == 2:
+        bucket = s3_settings.bucket_snapshots
+        ok = manifest.get("staging_bucket") == bucket and key.startswith(f"snapshots/{prefix}")
+    else:
+        bucket = manifest.get("staging_bucket") or s3_settings.bucket_staging
+        ok = bucket == s3_settings.bucket_staging and key.startswith(f"imports/{prefix}")
+    return (bucket, key) if ok else None
+
+
+def _invalid_upload_target() -> JSONResponse:
+    return create_problem_response(
+        status_code=status.HTTP_409_CONFLICT,
+        title="Conflict",
+        detail="Upload object location does not match the session manifest.",
+        extensions={"error_code": "IMPORT_STATE_CONFLICT"},
+    )
 
 def _build_session_response(
     row: dict[str, Any],
@@ -209,9 +245,11 @@ def create_import_session(
     store: IObjectStorePort = Depends(_get_storage_adapter),
     s3_settings: S3Settings = Depends(get_s3_settings),
     import_settings: ImportSettings = Depends(get_import_settings),
+    source_config: SourceStoreSettings = Depends(get_source_settings),
 ) -> JSONResponse:
     """Create a new dataset upload or staging import session."""
     _check_import_role(current_user)
+    PostgresImportStore.lock_tenant_storage(conn, current_user.tenant_id)
     from dq_scoring.services.privacy_rule_service import ensure_initialized
 
     ensure_initialized(conn, current_user.tenant_id)
@@ -267,7 +305,7 @@ def create_import_session(
 
     upload_id = uuid4()
     ext = req.format.lower()
-    staging_key = f"imports/{current_user.tenant_id}/{upload_id}/source.{ext}"
+    staging_key = f"snapshots/{current_user.tenant_id}/{upload_id}/source.{ext}"
 
     manifest: dict[str, Any] = {
         "request_fingerprint": request_fingerprint,
@@ -275,38 +313,68 @@ def create_import_session(
         "original_filename": req.original_filename,
         "format": req.format,
         "csv_options": req.csv_options.model_dump() if req.csv_options else None,
-        "staging_bucket": s3_settings.bucket_staging,
+        "storage_mode": "OWNED_RAW",
+        "upload_layout_version": 2,
+        "staging_bucket": s3_settings.bucket_snapshots,
         "staging_key": staging_key,
         "parts": {},
     }
 
     if req.source:
-        if req.source.bucket != s3_settings.bucket_staging or (
+        shared = req.source.source_id == "shared"
+        source_store = store
+        if shared:
+            try:
+                source_config.validate_owned_separation(s3_settings)
+                authorized = (
+                    source_config.enabled
+                    and req.source.bucket == source_config.bucket
+                    and any(req.source.key.startswith(p) for p in source_config.tenant_prefixes.get(current_user.tenant_id, []))
+                )
+            except ValueError:
+                authorized = False
+            if not authorized:
+                return _source_not_found()
+            source_store = S3ObjectStoreAdapter(source_config.as_s3_settings())
+        elif req.source.bucket != s3_settings.bucket_staging or (
             current_user.role != "WORKSPACE_ADMIN" and not req.source.key.startswith(f"imports/{current_user.tenant_id}/")
         ):
-            return create_problem_response(status_code=404, title="Not Found", detail="Source object not found in this workspace.", extensions={"error_code": "RESOURCE_NOT_FOUND"})
-        # Existing object in staging
-        source_ref = ObjectRef(bucket=req.source.bucket, key=req.source.key)
+            return _source_not_found()
+        source_ref = ObjectRef(bucket=req.source.bucket, key=req.source.key, version_id=req.source.version_id)
         try:
-            meta = store.head(source_ref)
-        except FileNotFoundError:
+            meta = source_store.head(source_ref)
+        except (FileNotFoundError, PermissionError):
+            return _source_not_found()
+        except ClientError as exc:
+            if req.source.version_id and exc.response.get('Error', {}).get('Code') in ('400', 'InvalidArgument', 'InvalidVersionId'):
+                return _source_not_found()
             return create_problem_response(
-                status_code=status.HTTP_404_NOT_FOUND,
-                title="Not Found",
-                detail=f"Source object s3://{req.source.bucket}/{req.source.key} not found.",
-                extensions={"error_code": "RESOURCE_NOT_FOUND"},
+                status_code=503, title='Storage Unavailable', detail='Unable to verify source storage object.',
+                extensions={'error_code': 'STORAGE_UNAVAILABLE'},
             )
-        except (BotoCoreError, ClientError, OSError):
+        except (BotoCoreError, OSError):
             return create_problem_response(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 title="Storage Unavailable",
                 detail="Unable to verify source storage object.",
                 extensions={"error_code": "STORAGE_UNAVAILABLE"},
             )
+        version_id = meta.version_id if meta.version_id not in (None, "", "null") else None
+        if req.source.version_id is not None and version_id != req.source.version_id:
+            return _source_not_found()
         if meta.size_bytes != req.size_bytes or meta.size_bytes > import_settings.max_bytes:
             return create_problem_response(status_code=409, title="Object changed", detail="Source size differs from the selected object.", extensions={"error_code": "OBJECT_CHANGED"})
 
-        manifest["source_ref"] = {"bucket": req.source.bucket, "key": req.source.key, "etag": meta.etag, "version_id": meta.version_id, "size_bytes": meta.size_bytes}
+        selected: dict[str, Any] = {"bucket": req.source.bucket, "key": req.source.key, "etag": meta.etag, "version_id": version_id, "size_bytes": meta.size_bytes}
+        manifest.pop("upload_layout_version")
+        manifest["staging_bucket"] = req.source.bucket
+        manifest["staging_key"] = req.source.key
+        if shared:
+            selected["source_id"] = "shared"
+            manifest["source_binding_sha256"] = source_binding_sha256(source_config)
+            if source_config.retention_guaranteed and version_id:
+                manifest["storage_mode"] = "EXTERNAL_VERSION"
+        manifest["source_ref"] = selected
         row = PostgresImportStore.create_session(
             conn,
             upload_id=upload_id,
@@ -325,9 +393,9 @@ def create_import_session(
             manifest=manifest,
         )
     else:
-        # Multipart upload initiated
+        # Multipart upload initiated directly in the owned snapshot bucket
         try:
-            mp_id = store.create_multipart(s3_settings.bucket_staging, staging_key)
+            mp_id = store.create_multipart(s3_settings.bucket_snapshots, staging_key)
         except (BotoCoreError, ClientError, OSError):
             return create_problem_response(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -372,6 +440,7 @@ async def upload_part(
 ) -> JSONResponse:
     """Stream a single multipart chunk to temporary spool and upload to S3."""
     _check_import_role(current_user)
+    PostgresImportStore.lock_tenant_storage(conn, current_user.tenant_id)
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (PostgresImportStore._hash_advisory_lock(upload_id, part_number),))
 
@@ -493,12 +562,14 @@ async def upload_part(
                 )
 
         # Upload part to S3
-        staging_key = session["staging_key"]
+        target = _upload_target(session, current_user.tenant_id, s3_settings)
+        if target is None:
+            return _invalid_upload_target()
         with await run_in_threadpool(temp_path.open, "rb") as stream:
             etag = await run_in_threadpool(
                 store.upload_part,
-                bucket=s3_settings.bucket_staging,
-                key=staging_key,
+                bucket=target[0],
+                key=target[1],
                 multipart_id=mp_id,
                 part_number=part_number,
                 stream=stream,
@@ -543,6 +614,7 @@ def complete_import(
 ) -> JSONResponse:
     """Complete an active multipart upload and transition session to STAGED."""
     _check_import_role(current_user)
+    PostgresImportStore.lock_tenant_storage(conn, current_user.tenant_id)
     with conn.cursor() as cur:
         cur.execute("SELECT upload_id FROM dataset_upload_sessions WHERE upload_id = %s AND tenant_id = %s FOR UPDATE", (upload_id, current_user.tenant_id))
 
@@ -597,18 +669,20 @@ def complete_import(
         or any(recorded.get(str(n), {}).get("etag", "").strip('"') != etag for n, etag in supplied.items())
     ):
         return create_problem_response(status_code=409, title="Incomplete upload", detail="Complete all recorded upload parts before finalizing.", extensions={"error_code": "IMPORT_STATE_CONFLICT"})
-
+    target = _upload_target(session, current_user.tenant_id, s3_settings)
+    if target is None:
+        return _invalid_upload_target()
     try:
         meta = store.complete_multipart(
-            bucket=s3_settings.bucket_staging,
-            key=session["staging_key"],
+            bucket=target[0],
+            key=target[1],
             multipart_id=mp_id,
             parts=parts,
         )
     except (BotoCoreError, ClientError, OSError):
         # Crash recovery: if complete_multipart already succeeded, HEAD staging object to reconcile
         try:
-            meta = store.head(ObjectRef(bucket=s3_settings.bucket_staging, key=session["staging_key"]))
+            meta = store.head(ObjectRef(bucket=target[0], key=target[1]))
             if meta.size_bytes != session["size_bytes"]:
                 return create_problem_response(
                     status_code=status.HTTP_409_CONFLICT,
@@ -626,11 +700,22 @@ def complete_import(
     if meta.size_bytes != session["size_bytes"]:
         return create_problem_response(status_code=409, title="Object changed", detail="Staged size does not match the upload manifest.", extensions={"error_code": "OBJECT_CHANGED"})
 
-    updated_row = PostgresImportStore.transition_staged(
+    PostgresImportStore.transition_staged(
         conn,
         upload_id=upload_id,
         tenant_id=current_user.tenant_id,
         destination_location=meta.ref.s3a_uri,
+    )
+    version_id = meta.version_id if meta.version_id not in (None, "", "null") else None
+    updated_row = PostgresImportStore.update_status(
+        conn,
+        upload_id=upload_id,
+        tenant_id=current_user.tenant_id,
+        status="STAGED",
+        manifest_patch={"source_ref": {
+            "bucket": target[0], "key": target[1], "etag": meta.etag,
+            "version_id": version_id, "size_bytes": meta.size_bytes,
+        }},
     )
 
     resp_model = _build_session_response(updated_row, import_settings, conn, current_user)
@@ -667,6 +752,7 @@ def configure_import_session(
 ) -> JSONResponse:
     """Apply updated column mapping and requeue session to STAGED."""
     _check_import_role(current_user)
+    PostgresImportStore.lock_tenant_storage(conn, current_user.tenant_id)
     with conn.cursor() as cur:
         cur.execute("SELECT upload_id FROM dataset_upload_sessions WHERE upload_id=%s AND tenant_id=%s FOR UPDATE", (upload_id, current_user.tenant_id))
 
@@ -703,12 +789,17 @@ def configure_import_session(
             extensions={"error_code": "IMPORT_STATE_CONFLICT"},
         )
 
+    conn.execute(
+        'UPDATE dataset_upload_sessions SET attempt_count=0 WHERE tenant_id=%s AND upload_id=%s',
+        (current_user.tenant_id, upload_id),
+    )
     # Requeue to STAGED with column_names mapping in manifest
     manifest_patch = {
         "column_names_mapping": req.column_names,
         "preview": None,
         "profile": None,
         "error_code": None,
+        "legacy_equivalence": None,
         "invalid_params": None,
     }
     updated = PostgresImportStore.update_status(
@@ -731,6 +822,7 @@ def register_import_snapshot(
 ) -> Any:
     """Finalize verified import session and register an immutable Dataset Snapshot."""
     _check_import_role(current_user)
+    PostgresImportStore.lock_tenant_storage(conn, current_user.tenant_id)
 
     try:
         snapshot = DatasetImportService.register_snapshot(
@@ -759,7 +851,7 @@ def register_import_snapshot(
                 detail=exc.detail,
                 extensions={"error_code": "RESOURCE_NOT_FOUND"},
             )
-        if exc.error_code in ("IMPORT_STATE_CONFLICT", "IMPORT_EXPIRED", "ASSET_NAME_CONFLICT", "REIMPORT_MAPPING_CONFLICT"):
+        if exc.error_code in ("IMPORT_STATE_CONFLICT", "IMPORT_EXPIRED", "ASSET_NAME_CONFLICT", "REIMPORT_MAPPING_CONFLICT", "IMPORT_REVERIFY_REQUIRED"):
             return create_problem_response(
                 status_code=status.HTTP_409_CONFLICT,
                 title="Conflict",
@@ -791,6 +883,7 @@ def abort_import_session(
 ) -> JSONResponse:
     """Abort an active import session and clean up multipart upload."""
     _check_import_role(current_user)
+    PostgresImportStore.lock_tenant_storage(conn, current_user.tenant_id)
     with conn.cursor() as cur:
         cur.execute("SELECT upload_id FROM dataset_upload_sessions WHERE upload_id=%s AND tenant_id=%s FOR UPDATE", (upload_id, current_user.tenant_id))
 
@@ -812,11 +905,14 @@ def abort_import_session(
         )
 
     mp_id = session.get("multipart_id")
+    target = _upload_target(session, current_user.tenant_id, s3_settings)
+    if mp_id and session["status"] in ("INITIATED", "UPLOADING") and target is None:
+        return _invalid_upload_target()
     if mp_id and session["status"] in ("INITIATED", "UPLOADING"):
         try:
             store.abort_multipart(
-                bucket=s3_settings.bucket_staging,
-                key=session["staging_key"],
+                bucket=target[0],
+                key=target[1],
                 multipart_id=mp_id,
             )
         except (BotoCoreError, ClientError, OSError):

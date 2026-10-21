@@ -16,6 +16,25 @@ x-worker-environment: &worker-environment
   SPARK_WORKER_DIR: /opt/spark/work-dir/worker
   AWS_ACCESS_KEY_ID: ${DQ_S3_ACCESS_KEY_ID:?Required}
   AWS_SECRET_ACCESS_KEY: ${DQ_S3_SECRET_ACCESS_KEY:?Required}
+  DQ_S3_ACCESS_KEY_ID: ${DQ_S3_ACCESS_KEY_ID:?Required}
+  DQ_S3_SECRET_ACCESS_KEY: ${DQ_S3_SECRET_ACCESS_KEY:?Required}
+  DQ_S3_ENDPOINT_URL: ${DQ_COMPOSE_S3_ENDPOINT_URL:-http://minio:9000}
+  DQ_S3_REGION: ${DQ_S3_REGION:-us-east-1}
+  DQ_S3_USE_SSL: ${DQ_S3_USE_SSL:-false}
+  DQ_S3_BUCKET_STAGING: ${DQ_S3_BUCKET_STAGING:?Required}
+  DQ_S3_BUCKET_SNAPSHOTS: ${DQ_S3_BUCKET_SNAPSHOTS:?Required}
+  DQ_S3_BUCKET_ARTIFACTS: ${DQ_S3_BUCKET_ARTIFACTS:?Required}
+  DQ_S3_CA_BUNDLE: ${DQ_S3_CA_BUNDLE:+/opt/dq/owned-ca/s3-ca.pem}
+  DQ_SOURCE_S3_ENABLED: ${DQ_SOURCE_S3_ENABLED:-false}
+  DQ_SOURCE_S3_ENDPOINT_URL: ${DQ_SOURCE_S3_ENDPOINT_URL:-}
+  DQ_SOURCE_S3_ACCESS_KEY_ID: ${DQ_SOURCE_S3_ACCESS_KEY_ID:-}
+  DQ_SOURCE_S3_SECRET_ACCESS_KEY: ${DQ_SOURCE_S3_SECRET_ACCESS_KEY:-}
+  DQ_SOURCE_S3_REGION: ${DQ_SOURCE_S3_REGION:-us-east-1}
+  DQ_SOURCE_S3_USE_SSL: ${DQ_SOURCE_S3_USE_SSL:-false}
+  DQ_SOURCE_S3_BUCKET: ${DQ_SOURCE_S3_BUCKET:-}
+  DQ_SOURCE_S3_TENANT_PREFIXES: ${DQ_SOURCE_S3_TENANT_PREFIXES:-}
+  DQ_SOURCE_S3_RETENTION_GUARANTEED: ${DQ_SOURCE_S3_RETENTION_GUARANTEED:-false}
+  DQ_SOURCE_S3_CA_BUNDLE: ${DQ_SOURCE_S3_CA_BUNDLE:+/opt/dq/source-ca/source-s3-ca.pem}
 
 services:
   spark-master:
@@ -31,7 +50,10 @@ services:
     command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.worker.Worker, --host, spark-worker-1, --cores, '4', --memory, 4g, 'spark://spark-master:7077']
     environment: *worker-environment
     mem_limit: 6144m
-    volumes: [worker-1-work:/opt/spark/work-dir]
+    volumes:
+      - worker-1-work:/opt/spark/work-dir
+      - ${DQ_SOURCE_S3_CA_BUNDLE:-/dev/null}:/opt/dq/source-ca/source-s3-ca.pem:ro
+      - ${DQ_S3_CA_BUNDLE:-/dev/null}:/opt/dq/owned-ca/s3-ca.pem:ro
     depends_on: [spark-master]
   spark-worker-2:
     <<: *spark-service
@@ -39,7 +61,10 @@ services:
     command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.worker.Worker, --host, spark-worker-2, --cores, '4', --memory, 4g, 'spark://spark-master:7077']
     environment: *worker-environment
     mem_limit: 6144m
-    volumes: [worker-2-work:/opt/spark/work-dir]
+    volumes:
+      - worker-2-work:/opt/spark/work-dir
+      - ${DQ_SOURCE_S3_CA_BUNDLE:-/dev/null}:/opt/dq/source-ca/source-s3-ca.pem:ro
+      - ${DQ_S3_CA_BUNDLE:-/dev/null}:/opt/dq/owned-ca/s3-ca.pem:ro
     depends_on: [spark-master]
   evaluation-worker:
     <<: *spark-service
@@ -48,6 +73,8 @@ services:
     mem_limit: 3072m
     volumes:
       - driver-work:/opt/spark/work-dir
+      - ${DQ_SOURCE_S3_CA_BUNDLE:-/dev/null}:/opt/dq/source-ca/source-s3-ca.pem:ro
+      - ${DQ_S3_CA_BUNDLE:-/dev/null}:/opt/dq/owned-ca/s3-ca.pem:ro
       - ${DQ_TEXT_DICTIONARY_DIR:-../../.tmp/text-dictionaries}:/opt/dq/text-dictionaries:ro
     depends_on: [spark-worker-1, spark-worker-2]
     environment:
@@ -56,13 +83,7 @@ services:
       DQ_WORKER_POSTGRES_DSN: ${DQ_WORKER_POSTGRES_DSN:?Required}
       DQ_WORKER_POSTGRES_HOST: postgres
       DQ_WORKER_POSTGRES_PORT: '5432'
-      DQ_S3_ENDPOINT_URL: http://minio:9000
-      DQ_S3_ACCESS_KEY_ID: ${DQ_S3_ACCESS_KEY_ID:?Required}
-      DQ_S3_SECRET_ACCESS_KEY: ${DQ_S3_SECRET_ACCESS_KEY:?Required}
-      DQ_S3_REGION: ${DQ_S3_REGION:-us-east-1}
-      DQ_S3_BUCKET_STAGING: ${DQ_S3_BUCKET_STAGING:?Required}
-      DQ_S3_BUCKET_SNAPSHOTS: ${DQ_S3_BUCKET_SNAPSHOTS:?Required}
-      DQ_S3_BUCKET_ARTIFACTS: ${DQ_S3_BUCKET_ARTIFACTS:?Required}
+      <<: *worker-environment
       DQ_SPARK_DRIVER_MEMORY: 2g
       DQ_SPARK_DRIVER_MEMORY_OVERHEAD: 512m
       DQ_SPARK_EXECUTOR_MEMORY: 4g

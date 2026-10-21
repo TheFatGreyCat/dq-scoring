@@ -11,7 +11,6 @@ from dq_scoring.core.dimension_scoring import (
     is_dimension_measured_rule,
 )
 from dq_scoring.core.entities import (
-    CanonicalMetric,
     DataAsset,
     DatasetSnapshot,
     ImmutableAssessment,
@@ -48,7 +47,6 @@ from dq_scoring.core.rule_scoring import (
 )
 
 __all__ = [
-    "CanonicalMetric",
     "DataAsset",
     "DatasetScoreResult",
     "DatasetScoringInput",

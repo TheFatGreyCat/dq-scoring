@@ -11,7 +11,7 @@ from pydantic import SecretStr
 
 from dq_scoring.adapters.storage.s3_object_store import S3ObjectStoreAdapter
 from dq_scoring.adapters.storage.s3_settings import S3Settings
-from dq_scoring.ports.object_store import ObjectRef, UploadedPart
+from dq_scoring.ports.object_store import ObjectChangedError, ObjectRef, UploadedPart
 
 
 @pytest.fixture
@@ -115,3 +115,84 @@ def test_copy_object(adapter: S3ObjectStoreAdapter, mock_s3_client: MagicMock) -
     assert meta.ref.bucket == "snapshots"
     assert meta.ref.key == "dest/file.csv"
     assert meta.size_bytes == 500
+
+
+def test_range_rejects_wrong_version_and_closes_body(adapter, mock_s3_client):
+    from dq_scoring.ports.object_store import ObjectChangedError
+    body = io.BytesIO(b'abc')
+    mock_s3_client.get_object.return_value = {
+        'Body': body, 'VersionId': 'B', 'ContentLength': 3, 'ContentRange': 'bytes 2-4/10',
+    }
+    with pytest.raises(ObjectChangedError):
+        adapter.open_range(ObjectRef('bucket', 'key', 'A'), 2, 3)
+    assert body.closed
+
+
+def test_range_reads_selected_historical_version(adapter, mock_s3_client):
+    mock_s3_client.get_object.return_value = {
+        'Body': io.BytesIO(b'abc'), 'VersionId': 'A', 'ContentLength': 3, 'ContentRange': 'bytes 2-4/10',
+    }
+    with adapter.open_range(ObjectRef('bucket', 'key', 'A'), 2, 3) as body:
+        assert body.read() == b'abc'
+    mock_s3_client.get_object.assert_called_once_with(Bucket='bucket', Key='key', VersionId='A', Range='bytes=2-4')
+
+
+def test_missing_historical_version_never_falls_back(adapter, mock_s3_client):
+    mock_s3_client.get_object.side_effect = ClientError({'Error': {'Code': 'NoSuchVersion'}}, 'GetObject')
+    with pytest.raises(FileNotFoundError):
+        adapter.open_range(ObjectRef('bucket', 'key', 'A'), 0, 1)
+
+
+def test_open_stream_sends_if_match_and_version(adapter: S3ObjectStoreAdapter, mock_s3_client: MagicMock) -> None:
+    mock_s3_client.get_object.return_value = {"Body": io.BytesIO(b"x")}
+    adapter.open_stream(ObjectRef("bucket", "key", "A"), if_match_etag='"etag-1"')
+    mock_s3_client.get_object.assert_called_once_with(Bucket="bucket", Key="key", VersionId="A", IfMatch='"etag-1"')
+
+
+def test_open_stream_without_if_match_sends_no_precondition(adapter: S3ObjectStoreAdapter, mock_s3_client: MagicMock) -> None:
+    mock_s3_client.get_object.return_value = {"Body": io.BytesIO(b"x")}
+    adapter.open_stream(ObjectRef("bucket", "key"))
+    mock_s3_client.get_object.assert_called_once_with(Bucket="bucket", Key="key")
+
+
+@pytest.mark.parametrize("code", ["412", "PreconditionFailed"])
+def test_open_stream_precondition_failure_is_object_changed(adapter: S3ObjectStoreAdapter, mock_s3_client: MagicMock, code: str) -> None:
+    mock_s3_client.get_object.side_effect = ClientError({"Error": {"Code": code}}, "GetObject")
+    with pytest.raises(ObjectChangedError):
+        adapter.open_stream(ObjectRef("bucket", "key"), if_match_etag="etag-1")
+
+
+def test_list_versions_yields_real_versions_only(adapter: S3ObjectStoreAdapter, mock_s3_client: MagicMock) -> None:
+    mock_s3_client.get_paginator.return_value.paginate.return_value = [
+        {"Versions": [{"Key": "k", "VersionId": "v1", "Size": 3, "ETag": '"e"'}, {"Key": "u", "VersionId": "null", "Size": 1}],
+         "DeleteMarkers": [{"Key": "k", "VersionId": "dm"}]},
+    ]
+    items = list(adapter.list_versions("bucket", "k"))
+    assert [(i.ref.key, i.ref.version_id) for i in items] == [("k", "v1"), ("u", None)]
+    mock_s3_client.get_paginator.assert_called_once_with("list_object_versions")
+
+
+@pytest.mark.parametrize("version", [None, "", "null"])
+def test_delete_version_requires_exact_version(adapter: S3ObjectStoreAdapter, mock_s3_client: MagicMock, version) -> None:
+    with pytest.raises(ValueError):
+        adapter.delete_version(ObjectRef("bucket", "key", version))
+    mock_s3_client.delete_object.assert_not_called()
+
+
+def test_delete_version_sends_version_and_maps_errors(adapter: S3ObjectStoreAdapter, mock_s3_client: MagicMock) -> None:
+    adapter.delete_version(ObjectRef("bucket", "key", "A"))
+    mock_s3_client.delete_object.assert_called_once_with(Bucket="bucket", Key="key", VersionId="A")
+    mock_s3_client.delete_object.side_effect = ClientError({"Error": {"Code": "NoSuchVersion"}}, "DeleteObject")
+    with pytest.raises(FileNotFoundError):
+        adapter.delete_version(ObjectRef("bucket", "key", "A"))
+    mock_s3_client.delete_object.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "DeleteObject")
+    with pytest.raises(PermissionError):
+        adapter.delete_version(ObjectRef("bucket", "key", "A"))
+
+
+def test_delete_version_maps_minio_worm_retention(adapter, mock_s3_client):
+    mock_s3_client.delete_object.side_effect = ClientError(
+        {'Error': {'Code': 'InvalidRequest', 'Message': 'Object is WORM protected and cannot be overwritten'}},
+        'DeleteObject')
+    with pytest.raises(PermissionError):
+        adapter.delete_version(ObjectRef('bucket', 'key', 'retained'))

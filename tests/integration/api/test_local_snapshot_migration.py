@@ -7,7 +7,7 @@ from psycopg.types.json import Jsonb
 from dq_scoring.presentation.cli.migrate_local_snapshots import migrate
 
 
-def test_dry_run_and_apply_preserve_historical_snapshot(db_conn, tmp_path):
+def test_dry_run_and_apply_preserve_historical_snapshot(db_conn, tmp_path, pg_dsn, monkeypatch):
     tenant, user, asset, old = uuid4(), uuid4(), uuid4(), uuid4()
     raw = b'id,amount\n1,12\n2,-1\n'
     path = tmp_path / 'legacy.csv'
@@ -23,6 +23,26 @@ def test_dry_run_and_apply_preserve_historical_snapshot(db_conn, tmp_path):
     assert report == [{'old_snapshot_id': str(old), 'status': 'VALIDATED'}]
     assert db_conn.execute('SELECT count(*) FROM dataset_snapshots WHERE asset_id=%s', (asset,)).fetchone()[0] == 1
     db_conn.commit()
+    import psycopg
+    import pytest
+
+    from dq_scoring.adapters.storage.s3_object_store import S3ObjectStoreAdapter
+    from dq_scoring.adapters.storage.s3_settings import get_s3_settings
+    from dq_scoring.adapters.storage.source_settings import SourceStoreSettings
+    from dq_scoring.presentation.cli import prune_snapshot_orphans as pruning
+
+    original_put = S3ObjectStoreAdapter.put_file
+    blocked = []
+    monkeypatch.setattr(pruning, 'LOCK_TIMEOUT', '200ms')
+    def put_with_competing_pruner(store, bucket, key, path):
+        metadata = original_put(store, bucket, key, path)
+        with psycopg.connect(pg_dsn) as contender, pytest.raises(psycopg.errors.LockNotAvailable):
+            pruning.prune_orphans(contender, store, get_s3_settings(), SourceStoreSettings(),
+                                  tenant_id=tenant, apply=True)
+        assert store.head(metadata.ref).version_id == metadata.version_id
+        blocked.append(key)
+        return metadata
+    monkeypatch.setattr(S3ObjectStoreAdapter, 'put_file', put_with_competing_pruner)
     report = migrate(db_conn, tenant, [asset], tmp_path, True)
     db_conn.commit()
     successor = report[0]['new_snapshot_id']
@@ -31,3 +51,4 @@ def test_dry_run_and_apply_preserve_historical_snapshot(db_conn, tmp_path):
     created = db_conn.execute('SELECT source_kind,content_sha256,parent_snapshot_id FROM dataset_snapshots WHERE snapshot_id=%s', (successor,)).fetchone()
     assert created == ('OBJECT_FILE', digest, old)
     assert db_conn.execute('SELECT current_snapshot_id FROM data_assets WHERE asset_id=%s', (asset,)).fetchone()[0] == UUID(successor)
+    assert len(blocked) == 1

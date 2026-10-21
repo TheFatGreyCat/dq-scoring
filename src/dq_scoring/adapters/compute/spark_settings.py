@@ -8,11 +8,18 @@ from typing import Annotated, Self
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from dq_scoring.adapters.storage.source_settings import SourceStoreSettings
 from dq_scoring.common.protected_transport import is_protected_processing_enabled
 
 MemorySize = Annotated[str, Field(pattern=r"^\d+[mMgG]$")]
 """JVM memory size such as '1024m' or '2g'."""
 K8S_MASTER_PREFIX = "k8s://"
+_OWNED_EXECUTOR_ENV = (
+    "ENDPOINT_URL", "REGION", "USE_SSL", "BUCKET_STAGING", "BUCKET_SNAPSHOTS", "BUCKET_ARTIFACTS", "CA_BUNDLE",
+)
+_SOURCE_EXECUTOR_ENV = (
+    "ENABLED", "ENDPOINT_URL", "REGION", "USE_SSL", "CA_BUNDLE", "BUCKET", "TENANT_PREFIXES", "RETENTION_GUARANTEED",
+)
 
 
 def _mib(size: str) -> int:
@@ -40,6 +47,9 @@ class SparkSettings(BaseSettings):
     driver_pod_name: str | None = None
     driver_port: int = 7078
     block_manager_port: int = 7079
+    object_store_secret: str = "dq-minio-secret"
+    object_store_access_key_id_key: str = "access_key"
+    object_store_secret_access_key_key: str = "secret_key"
     # Storage is managed via S3A / MinIO object store; no hostPath mount
     @model_validator(mode="after")
     def _check_memory_budget(self) -> Self:
@@ -54,6 +64,41 @@ class SparkSettings(BaseSettings):
                 f"exceeds DQ_SPARK_MAX_MEMORY_MB={self.max_memory_mb}"
             )
         return self
+
+    @staticmethod
+    def _executor_env_conf() -> dict[str, str]:
+        """Nonsecret owned/source store settings that executors rebuild their storage clients from."""
+        pairs = [(f"DQ_S3_{n}", os.environ.get(f"DQ_S3_{n}")) for n in _OWNED_EXECUTOR_ENV]
+        pairs += [(f"DQ_SOURCE_S3_{n}", os.environ.get(f"DQ_SOURCE_S3_{n}")) for n in _SOURCE_EXECUTOR_ENV]
+        return {f"spark.executorEnv.{name}": value for name, value in pairs if value}
+
+    def _object_store_conf(self) -> dict[str, str]:
+        """Kubernetes executor credentials and source CA mount; credentials only ever as secretKeyRef."""
+        owned = self.object_store_secret
+        conf = {
+            "spark.kubernetes.executor.secretKeyRef.DQ_S3_ACCESS_KEY_ID": f"{owned}:{self.object_store_access_key_id_key}",
+            "spark.kubernetes.executor.secretKeyRef.DQ_S3_SECRET_ACCESS_KEY": f"{owned}:{self.object_store_secret_access_key_key}",
+        }
+        owned_ca = os.environ.get("DQ_S3_CA_BUNDLE")
+        if owned_ca:
+            security_dir = os.getenv("DQ_SECURITY_DIR", "/opt/dq/security")
+            if not is_protected_processing_enabled() or os.path.dirname(owned_ca) != security_dir:
+                raise ValueError(
+                    "DQ_S3_CA_BUNDLE is unsupported for Kubernetes executors unless protected processing mounts it "
+                    f"from the Spark security Secret directory {security_dir}"
+                )
+        source = SourceStoreSettings()
+        if not source.enabled:
+            return conf
+        if not source.executor_secret:
+            raise ValueError("DQ_SOURCE_S3_EXECUTOR_SECRET is required for Kubernetes executors when the source store is enabled")
+        conf["spark.kubernetes.executor.secretKeyRef.DQ_SOURCE_S3_ACCESS_KEY_ID"] = f"{source.executor_secret}:{source.access_key_id_key}"
+        conf["spark.kubernetes.executor.secretKeyRef.DQ_SOURCE_S3_SECRET_ACCESS_KEY"] = f"{source.executor_secret}:{source.secret_access_key_key}"
+        if source.ca_secret:
+            if not source.ca_bundle:
+                raise ValueError("DQ_SOURCE_S3_CA_BUNDLE is required when DQ_SOURCE_S3_CA_SECRET is set")
+            conf[f"spark.kubernetes.executor.secrets.{source.ca_secret}"] = os.path.dirname(source.ca_bundle)
+        return conf
 
     def to_spark_conf(self) -> dict[str, str]:
         """Return backend-specific sizing and reachable driver configuration."""
@@ -71,6 +116,7 @@ class SparkSettings(BaseSettings):
             return conf
         if not self.driver_host:
             raise ValueError("DQ_SPARK_DRIVER_HOST is required for a distributed Spark master")
+        conf |= self._executor_env_conf()
         conf |= {
             "spark.driver.host": self.driver_host,
             "spark.driver.bindAddress": "0.0.0.0",
@@ -95,6 +141,7 @@ class SparkSettings(BaseSettings):
             "spark.kubernetes.authenticate.driver.serviceAccountName": self.kubernetes_service_account,
             "spark.kubernetes.executor.deleteOnTermination": "true",
         }
+        conf |= self._object_store_conf()
         if self.driver_pod_name:
             conf["spark.kubernetes.driver.pod.name"] = self.driver_pod_name
         if is_protected_processing_enabled():

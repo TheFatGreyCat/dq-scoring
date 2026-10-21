@@ -254,7 +254,6 @@ def test_import_worker_process_and_register_snapshot(client: TestClient, db_conn
     assert snap_data["source_kind"] == "OBJECT_FILE"
     assert snap_data["total_rows"] == 3
     assert snap_data["total_columns"] == 3
-    assert "s3a://" in snap_data["source_descriptor"]["canonical"]["s3a_uri"]
 
     # 7. Re-registering same session returns same snapshot response idempotently
     reg_resp2 = client.post(

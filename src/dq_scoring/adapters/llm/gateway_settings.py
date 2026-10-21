@@ -34,3 +34,12 @@ class LlmSettings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_llm_settings() -> LlmSettings:
     return LlmSettings()
+
+
+class LocalLlmSettings(LlmSettings):
+    model_config = SettingsConfigDict(env_prefix="DQ_LLM_LOCAL_", env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+
+@lru_cache(maxsize=1)
+def get_local_llm_settings() -> LocalLlmSettings:
+    return LocalLlmSettings()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ def create_test_snapshot(
     delimiter: str = ",",
     column_names_mapping: list[str] | None = None,
 ) -> DatasetSnapshot:
-    """Upload a local file directly to staging S3 and normalize to canonical Parquet snapshot."""
+    """Upload a local file to staging S3 and freeze one immutable raw (v2 descriptor, no canonical Parquet)."""
     path = Path(file_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Fixture file not found: {path}")
@@ -46,36 +47,32 @@ def create_test_snapshot(
 
     staged_meta = store.put_file(s3_settings.bucket_staging, staging_key, path)
 
-    inspection = tabular_adapter.inspect_and_normalize(
+    inspection = tabular_adapter.inspect_snapshot(
         source=ObjectRef(
             bucket=s3_settings.bucket_staging,
             key=staging_key,
             version_id=staged_meta.ref.version_id,
         ),
+        source_store=store,
+        storage_mode="OWNED_RAW",
         destination_bucket=s3_settings.bucket_snapshots,
-        destination_prefix=f"snapshots/{tenant}/{upload_id}/attempt-1",
+        destination_prefix=f"snapshots/{tenant}/{upload_id}",
         file_format=file_format.upper(),
         delimiter=delimiter,
         column_names_mapping=column_names_mapping,
     )
 
     source_descriptor = {
+        "descriptor_version": 2,
+        "storage_mode": inspection.storage_mode,
         "bucket": inspection.raw_ref.bucket,
         "key": inspection.raw_ref.key,
         "version_id": inspection.raw_ref.version_id,
-        "size_bytes": inspection.raw_size_bytes,
         "content_sha256": inspection.raw_sha256,
+        "size_bytes": inspection.raw_size_bytes,
         "format": file_format.upper(),
-        "canonical": {
-            "bucket": inspection.canonical_ref.bucket,
-            "key": inspection.canonical_ref.key,
-            "version_id": inspection.canonical_ref.version_id,
-            "size_bytes": inspection.canonical_size_bytes,
-            "content_sha256": inspection.canonical_sha256,
-            "format": "PARQUET",
-            "s3a_uri": inspection.canonical_ref.s3a_uri,
-        },
         "normalization_version": inspection.normalization_version,
+        "normalization": {**asdict(inspection.normalization), "columns": list(inspection.normalization.columns)},
     }
 
     return DatasetSnapshot(
@@ -102,6 +99,7 @@ def register_snapshot_via_api(
     file_format: str = "CSV",
     filename: str = "data.csv",
     delimiter: str = ",",
+    process_full_profile: bool = False,
 ) -> dict[str, Any]:
     """Execute real upload session -> chunk upload -> complete -> worker claim & process -> register snapshot."""
     import os
@@ -179,4 +177,37 @@ def register_snapshot_via_api(
         json={"acknowledged_warnings": ["SINGLE_COLUMN_INPUT"]},
     )
     assert reg_resp.status_code == 200, f"Failed to register snapshot: {reg_resp.text}"
-    return reg_resp.json()
+    registered = reg_resp.json()
+    if process_full_profile:
+        process_full_profile_for(registered["snapshot_id"], worker_db if isinstance(worker_db, str) else None)
+    return registered
+
+
+_PROFILE_COMPUTE: Any = None
+
+
+def process_full_profile_for(snapshot_id: str | UUID, dsn: str | None = None) -> None:
+    """Run the real Spark profile worker until this snapshot's current FULL job is COMPLETE."""
+    import os
+
+    from dq_scoring.adapters.compute.spark_compute import PySparkComputeAdapter
+    from dq_scoring.adapters.queue.postgres_profile_queue import PostgresProfileQueue
+    from dq_scoring.workers.snapshot_profile_worker import SnapshotProfileWorker
+
+    global _PROFILE_COMPUTE
+    dsn = dsn or os.environ["DQ_TEST_POSTGRES_DSN"]
+    if _PROFILE_COMPUTE is None:
+        _PROFILE_COMPUTE = PySparkComputeAdapter()
+    worker = SnapshotProfileWorker(
+        PostgresProfileQueue(dsn, f"test-profile-{uuid4().hex[:6]}"), _PROFILE_COMPUTE, heartbeat_interval=0.5
+    )
+    while True:
+        with psycopg.connect(dsn) as conn:
+            state = conn.execute(
+                "SELECT state FROM snapshot_profile_jobs WHERE snapshot_id=%s", (UUID(str(snapshot_id)),)
+            ).fetchone()
+        assert state is not None, "registration did not enqueue a FULL profile job"
+        if state[0] == "COMPLETE":
+            return
+        assert state[0] in ("QUEUED", "RUNNING"), f"FULL profile ended in {state[0]}"
+        assert worker.run_once(), "FULL profile job was not claimable"

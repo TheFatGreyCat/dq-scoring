@@ -77,6 +77,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.minio.existingSecret }}
                   key: {{ .Values.minio.secretAccessKeyKey }}
+            {{- include "dq-scoring.sourceStore.env" . | nindent 12 }}
             - name: DQ_AUTH_SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -104,6 +105,30 @@ spec:
                 secretKeyRef:
                   name: {{ required "llm.existingSecret is required when advisory is enabled" .Values.llm.existingSecret }}
                   key: {{ required "llm.apiKeyKey is required when advisory is enabled" .Values.llm.apiKeyKey }}
+            {{- if .Values.llm.caSecret }}
+            - name: DQ_LLM_CA_BUNDLE
+              value: "/opt/dq/llm-ca/{{ .Values.llm.caKey }}"
+            {{- end }}
+            {{- end }}
+            - name: DQ_LLM_LOCAL_ENABLED
+              value: {{ .Values.llmLocal.enabled | quote }}
+            {{- if .Values.llmLocal.enabled }}
+            {{- if .Values.security.protectedProcessing.enabled }}
+            {{- fail "LOCAL LLM is not enabled for protected processing: approved egress policy is required" }}
+            {{- end }}
+            - name: DQ_LLM_LOCAL_ENDPOINT
+              value: {{ required "llmLocal.endpoint is required when LOCAL provider is enabled" .Values.llmLocal.endpoint | quote }}
+            - name: DQ_LLM_LOCAL_MODEL
+              value: {{ required "llmLocal.model is required when LOCAL provider is enabled" .Values.llmLocal.model | quote }}
+            - name: DQ_LLM_LOCAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "llmLocal.existingSecret is required when LOCAL provider is enabled" .Values.llmLocal.existingSecret }}
+                  key: {{ required "llmLocal.apiKeyKey is required when LOCAL provider is enabled" .Values.llmLocal.apiKeyKey }}
+            {{- if .Values.llmLocal.caSecret }}
+            - name: DQ_LLM_LOCAL_CA_BUNDLE
+              value: "/opt/dq/llm-local-ca/{{ .Values.llmLocal.caKey }}"
+            {{- end }}
             {{- end }}
           livenessProbe:
             httpGet:
@@ -138,6 +163,17 @@ spec:
             - name: scratch
               mountPath: /scratch
             {{- end }}
+            {{- include "dq-scoring.sourceStore.volumeMount" . | nindent 12 }}
+            {{- if and .Values.llm.enabled .Values.llm.caSecret }}
+            - name: llm-ca
+              mountPath: /opt/dq/llm-ca
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.llmLocal.enabled .Values.llmLocal.caSecret }}
+            - name: llm-local-ca
+              mountPath: /opt/dq/llm-local-ca
+              readOnly: true
+            {{- end }}
       volumes:
         {{- if .Values.security.protectedProcessing.enabled }}
         - name: scratch
@@ -149,5 +185,16 @@ spec:
         - name: scratch
           emptyDir:
             sizeLimit: {{ required "api.scratchSizeLimit is required for disk-backed API scratch" .Values.api.scratchSizeLimit }}
+        {{- end }}
+        {{- include "dq-scoring.sourceStore.volume" . | nindent 8 }}
+        {{- if and .Values.llm.enabled .Values.llm.caSecret }}
+        - name: llm-ca
+          secret:
+            secretName: {{ .Values.llm.caSecret }}
+        {{- end }}
+        {{- if and .Values.llmLocal.enabled .Values.llmLocal.caSecret }}
+        - name: llm-local-ca
+          secret:
+            secretName: {{ .Values.llmLocal.caSecret }}
         {{- end }}
 {{- end }}

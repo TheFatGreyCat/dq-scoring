@@ -1,12 +1,19 @@
-"""Sample-based suggestions; never infer business constraints from observations."""
+"""Profile-based suggestions (SAMPLE or FULL); never infer business constraints from observations."""
 
 from __future__ import annotations
 
 import re
 
+from dq_scoring.common.llm_context import parse_spec, profile_scope
 
-def recommend_rules(schema: dict, profile: dict, domain: str, priorities: tuple[str, ...], templates: list[dict]) -> dict:
+
+def recommend_rules(
+    schema: dict, profile: dict, domain: str, priorities: tuple[str, ...], templates: list[dict], confirmed: dict[str, str] | None = None,
+) -> dict:
+    confirmed = confirmed or {}
     stats = {column["name"]: column for column in profile.get("columns", [])}
+    scope = profile_scope(profile)
+    prefix = "FULL" if scope["mode"] == "FULL" else "SAMPLE"
     rules = []
     for index, column in enumerate(schema.get("columns", [])):
         name = column["name"] if isinstance(column, dict) else column
@@ -14,19 +21,19 @@ def recommend_rules(schema: dict, profile: dict, domain: str, priorities: tuple[
         nonnull = stat.get("non_null_count", 0)
         candidates = []
         if "COMPLETENESS" in priorities:
-            candidates.append(("COMPLETENESS", "NON_NULL", {"column": name}, "SAMPLE_NULL_STATISTICS"))
-        kind = stat.get("type_hint", "STRING")
-        if "VALIDITY" in priorities and kind in ("INTEGER", "DOUBLE", "DATE", "TIMESTAMP") and nonnull and stat.get("parse_success_count", 0) / nonnull >= .95:
-            params = {"column": name, "data_type": kind}
-            if kind in ("DATE", "TIMESTAMP"):
-                fmt = stat.get("timestamp_format", "yyyy-MM-dd" if kind == "DATE" else None)
-                if not fmt:
-                    continue
-                params["format"] = fmt
-            candidates.append(("VALIDITY", "TYPE_PARSE", params, "SAMPLE_PARSE_SUCCESS"))
+            candidates.append(("COMPLETENESS", "NON_NULL", {"column": name}, f"{prefix}_NULL_STATISTICS"))
+        spec = parse_spec(stat)
+        parsed = stat.get("parse_success_count")
+        if "VALIDITY" in priorities and spec and nonnull and parsed is not None and parsed / nonnull >= .95:
+            params = {"column": name, "data_type": spec[0]}
+            if spec[1]:
+                params["format"] = spec[1]
+            candidates.append(("VALIDITY", "TYPE_PARSE", params, f"{prefix}_PARSE_SUCCESS"))
         tokens = re.split(r"[^a-z0-9]+", name.casefold())
-        if "UNIQUENESS" in priorities and "id" in tokens and nonnull and stat.get("distinct_count") == nonnull:
-            candidates.append(("UNIQUENESS", "UNIQUENESS", {"column": name}, "SAMPLE_UNIQUENESS_NOT_PROOF"))
+        # A user-confirmed label overrides the name hint; unconfirmed columns keep the existing heuristic.
+        identifier = confirmed[name] == "IDENTIFIER" if name in confirmed else "id" in tokens
+        if "UNIQUENESS" in priorities and identifier and nonnull and stat.get("distinct_count") is not None and stat["distinct_count"] == nonnull:
+            candidates.append(("UNIQUENESS", "UNIQUENESS", {"column": name}, f"{prefix}_UNIQUENESS_NOT_PROOF"))
         for dimension, rule_type, params, reason in candidates:
             rules.append({"rule": {
                 "rule_code": f"suggested_{index}_{rule_type.lower()}", "dimension": dimension,
@@ -34,7 +41,7 @@ def recommend_rules(schema: dict, profile: dict, domain: str, priorities: tuple[
                 "is_required": False, "is_critical": False, "gate_enabled": True,
                 "score_enabled": True, "is_advisory": False, "contribution_weight": 1,
             }, "reason_code": reason, "reason_params": {"column": name, "null_count": stat.get("null_count", 0)},
-            "sample_rows": profile.get("sample_rows", 0), "is_sample": True})
+            "semantic": confirmed.get(name), **_provenance(scope)})
     rules.sort(key=lambda item: (item["rule"]["dimension"], item["reason_params"]["column"], item["rule"]["rule_type"]))
     columns = {str(c["name"] if isinstance(c, dict) else c).casefold().replace(" ", "_") for c in schema.get("columns", [])}
     ruleset_templates, policy_templates = [], []
@@ -56,4 +63,10 @@ def recommend_rules(schema: dict, profile: dict, domain: str, priorities: tuple[
     for item in ruleset_templates:
         item.pop("_domain")
         item.pop("_code")
-    return {"rules": rules, "ruleset_templates": ruleset_templates, "policy_templates": policy_templates, "warnings": ["SAMPLE_RECOMMENDATIONS_REQUIRE_REVIEW"]}
+    return {"rules": rules, "ruleset_templates": ruleset_templates, "policy_templates": policy_templates, "warnings": [f"{prefix}_RECOMMENDATIONS_REQUIRE_REVIEW"]}
+
+
+def _provenance(scope: dict) -> dict:
+    """Per-candidate evidence scope, taken from the profile actually used."""
+    return {"sample_rows": scope["rows"] or 0, "is_sample": scope["is_sample"], "profile_mode": scope["mode"],
+            "profile_id": scope["profile_id"], "profile_fingerprint": scope["fingerprint"]}

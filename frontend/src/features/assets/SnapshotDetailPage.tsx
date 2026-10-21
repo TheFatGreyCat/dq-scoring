@@ -9,6 +9,7 @@ import { useI18n } from "../../lib/i18n";
 import { PrivacyPanel, useColumnClassifications } from "./PrivacyPanel";
 import { PrivacyRulesPanel } from "./PrivacyRulesPanel";
 import { ProfilingPanel } from "./ProfilingPanel";
+import { SemanticPanel } from "./SemanticPanel";
 
 const VALID_TABS = ["overview", "classification", "detectors"] as const;
 type TabType = (typeof VALID_TABS)[number];
@@ -178,6 +179,8 @@ export function SnapshotDetailPage() {
           previewError={preview.error}
         />
       )}
+
+      {tab === "overview" && <SemanticPanel snapshotId={snapshot.snapshot_id} />}
 
       {tab === "classification" && (
         <PrivacyPanel

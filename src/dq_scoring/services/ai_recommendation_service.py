@@ -29,10 +29,12 @@ from dq_scoring.adapters.llm.recommendation_adapter import (
     validate_candidates,
 )
 from dq_scoring.common.llm_context import (
+    SEMANTIC_VOCABULARY_VERSION,
     RecommendationContext,
     build_recommendation_context,
     canonical_json,
     context_sha256,
+    profile_scope,
 )
 from dq_scoring.presentation.api.auth import AuthenticatedUser
 from dq_scoring.presentation.api.dependencies import (
@@ -41,6 +43,7 @@ from dq_scoring.presentation.api.dependencies import (
     scoped_tenant_connection,
 )
 from dq_scoring.services.privacy_policy import resolve_snapshot_protection
+from dq_scoring.services.semantic_service import confirmed_labels
 
 FALLBACK_CODES = frozenset({"AI_TIMEOUT", "AI_UNAVAILABLE", "AI_INVALID_OUTPUT", "AI_BUSY"})
 
@@ -67,13 +70,15 @@ def _prepare(conn: psycopg.Connection, user: AuthenticatedUser, snapshot_id: UUI
     protection = resolve_snapshot_protection(conn, user.tenant_id, snapshot_id)
     if protection.scan_status != "COMPLETE" or protection.scan_stale:
         raise AiError("PRIVACY_SCAN_NOT_COMPLETE")
+    revision, confirmed = confirmed_labels(conn, user.tenant_id, snapshot_id)
     context, tokens = build_recommendation_context(
-        data["schema_definition"], data["profile"] or {}, protection.protected_columns, data["total_rows"], max_columns,
+        data["schema_definition"], data["profile"] or {}, protection.protected_columns, data["total_rows"], max_columns, confirmed,
     )
     if context is None:
         raise AiError("AI_NO_ELIGIBLE_COLUMNS")
     payload = canonical_json(context)
-    state = (protection.policy_version, protection.scan_status, tuple(sorted(protection.protected_columns)))
+    state = (revision, protection.policy_version, protection.scan_status, tuple(sorted(protection.protected_columns)),
+             tuple(sorted(profile_scope(data["profile"] or {}).items(), key=str)))
     return _Prepared(state, context, context_sha256(payload), payload, tokens, data["profile"] or {}, heuristic)
 
 
@@ -139,8 +144,10 @@ async def recommend_with_ai(
             "engine": engine, "source": "HEURISTIC_FALLBACK" if fallback_code else ("HYBRID" if engine == "HYBRID" else "LLM"),
             "model": None if fallback_code else model, "prompt_version": PROMPT_VERSION,
             "context_sha256": prepared.digest, "generated_at": datetime.now(UTC).isoformat(),
+            "provider": "API", "vocabulary_version": SEMANTIC_VOCABULARY_VERSION,
+            "semantic_revision": prepared.state[0], "privacy_policy_version": prepared.state[1],
             "fallback": fallback_code is not None, "fallback_code": fallback_code,
-            "candidates_rejected": rejected, "columns_sent": len(prepared.context.columns),
+            "profile": profile_scope(prepared.profile), "candidates_rejected": rejected, "columns_sent": len(prepared.context.columns),
         },
     }
 

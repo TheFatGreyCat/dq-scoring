@@ -19,8 +19,7 @@ from dq_scoring.workers.evaluation_worker import EvaluationWorker
 from tests.support.object_snapshots import register_snapshot_via_api
 
 
-@pytest.mark.parametrize("changed_object", ["raw", "canonical"])
-def test_import_governance_replay_and_overwrite(pg_dsn, db_conn, changed_object):
+def test_import_governance_replay_and_overwrite(pg_dsn, db_conn):
     tenant, creator, approver = uuid4(), uuid4(), uuid4()
     password = uuid4().hex
     with db_conn.cursor() as cur:
@@ -36,7 +35,7 @@ def test_import_governance_replay_and_overwrite(pg_dsn, db_conn, changed_object)
             return {"Authorization": f"Bearer {result.json()['access_token']}"}
         headers, independent = login(creator), login(approver)
         raw = b"transaction_id,amount,currency\nt1,10.00,USD\nt2,-1.00,USD\nt3,,USD\n"
-        snap = register_snapshot_via_api(client, headers, pg_dsn, raw, asset_name="Finance E2E")
+        snap = register_snapshot_via_api(client, headers, pg_dsn, raw, asset_name="Finance E2E", process_full_profile=True)
         assert snap["total_rows"] == 3
         rules = client.post("/api/v1/rulesets", headers=headers, json={"asset_id": snap["asset_id"], "name": "Finance rules", "rules": [
             {"rule_code": "nonnull", "dimension": "COMPLETENESS", "rule_type": "NON_NULL", "parameters": {"column": "amount"}},
@@ -72,17 +71,19 @@ def test_import_governance_replay_and_overwrite(pg_dsn, db_conn, changed_object)
         assert counts["range"]["passed_count"] == 1
         assert counts["range"]["failed_count"] == 1
         assert counts["range"]["missing_count"] == 1
-        source = snap["source_descriptor"]
-        descriptor = source if changed_object == "raw" else source["canonical"]
+        descriptor = snap['source_descriptor']
         store = S3ObjectStoreAdapter()
-        store._client.put_object(Bucket=descriptor["bucket"], Key=descriptor["key"], Body=b"changed")
+        store._client.put_object(Bucket=descriptor['bucket'], Key=descriptor['key'], Body=b'changed')
+        _, historical = run()
+        assert historical.assessment_hash == first.assessment_hash
+        store._client.delete_object(Bucket=descriptor['bucket'], Key=descriptor['key'], VersionId=descriptor['version_id'])
         result = client.post("/api/v1/runs", headers=headers, json={"snapshot_id": snap["snapshot_id"], "ruleset_id": ruleset, "policy_id": policy_id, "idempotency_key": uuid4().hex})
         assert result.status_code == 202
         failed_run = result.json()["run_id"]
-        with pytest.raises(RunAbortedError, match="OBJECT_CHANGED"):
+        with pytest.raises(RunAbortedError, match='RESOURCE_NOT_FOUND'):
             worker.run_by_id(UUID(failed_run))
         state = client.get(f"/api/v1/runs/{failed_run}/status", headers=headers).json()
         assert state["status"] == "FAILED"
         assert state["assessment_id"] is None
     with psycopg.connect(pg_dsn) as conn:
-        assert conn.execute("SELECT count(*) FROM assessments WHERE tenant_id=%s", (tenant,)).fetchone()[0] == 2
+        assert conn.execute('SELECT count(*) FROM assessments WHERE tenant_id=%s', (tenant,)).fetchone()[0] == 3

@@ -2,18 +2,91 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+from datetime import UTC, datetime
+from hashlib import sha256
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from dq_scoring.adapters.db.tenant_context import set_tenant_context
 from dq_scoring.common.hash_utils import compute_deterministic_hash
-from dq_scoring.core.entities import RunSpec
+from dq_scoring.common.profiling import PROFILER_VERSION, ColumnProfile, SnapshotProfile
+from dq_scoring.core.entities import DatasetSnapshot, RunSpec
+from dq_scoring.services.snapshot_profile_service import (
+    load_snapshot,
+    profile_fingerprint,
+)
 
 
-def seed_run_prerequisites(dsn: str, spec: RunSpec) -> RunSpec:
-    """Insert approved configuration for `spec` and return it with resolved IDs."""
+def synthetic_full_profile(
+    snapshot: DatasetSnapshot, *, profile_id: UUID | None = None, fingerprint: str | None = None
+) -> SnapshotProfile:
+    """Validated FULL profile for a known synthetic fixture: no nulls, distinct unknown.
+
+    Only for fixtures where the profile gate is not under test; real FULL evidence comes from the Spark worker.
+    """
+    columns = []
+    for definition in snapshot.schema_definition.get("columns", []):
+        definition = {"name": definition} if isinstance(definition, str) else definition
+        target = definition.get("parse_target")
+        columns.append(
+            ColumnProfile(
+                name=definition["name"],
+                technical_type=definition.get("type", "STRING").upper(),
+                null_count=0,
+                non_null_count=snapshot.total_rows,
+                distinct_reason="UNSUPPORTED_TYPE",
+                parse_success_count=snapshot.total_rows if target else None,
+                parse_target=target,
+                parse_format=definition.get("parse_format"),
+                parse_reason=None if target else "NO_EXPLICIT_TARGET",
+            )
+        )
+    return SnapshotProfile(
+        mode="FULL",
+        profiler_version=PROFILER_VERSION,
+        profile_id=profile_id or uuid4(),
+        fingerprint=fingerprint or sha256(str(snapshot.snapshot_id).encode()).hexdigest(),
+        generated_at=datetime.now(UTC),
+        total_rows=snapshot.total_rows,
+        scanned_rows=snapshot.total_rows,
+        is_sample=False,
+        sampling_method="EXACT",
+        columns=tuple(columns),
+    )
+
+
+def _seed_full_profile(conn: psycopg.Connection, tenant_id: UUID, snapshot_id: UUID) -> None:
+    """Publish a synthetic COMPLETE job through the real lease transitions (superuser seed connection)."""
+    snapshot = load_snapshot(conn, tenant_id, snapshot_id)
+    fingerprint = profile_fingerprint(conn, snapshot)
+    row = conn.execute(
+        "INSERT INTO snapshot_profile_jobs(tenant_id,snapshot_id,fingerprint,profiler_version) VALUES(%s,%s,%s,%s) "
+        "ON CONFLICT(tenant_id,snapshot_id,fingerprint) DO NOTHING RETURNING profile_id",
+        (tenant_id, snapshot_id, fingerprint, PROFILER_VERSION),
+    ).fetchone()
+    if row is None:
+        return
+    profile = synthetic_full_profile(snapshot, profile_id=row[0], fingerprint=fingerprint)
+    conn.execute(
+        "UPDATE snapshot_profile_jobs SET state='RUNNING',lease_owner='seed',lease_generation=1,attempt_count=1,"
+        "started_at=clock_timestamp(),heartbeat_at=clock_timestamp(),lease_expires_at=clock_timestamp()+interval '1 hour' "
+        "WHERE profile_id=%s",
+        (row[0],),
+    )
+    conn.execute(
+        "UPDATE snapshot_profile_jobs SET state='COMPLETE',result=%s,finished_at=clock_timestamp() WHERE profile_id=%s",
+        (Jsonb(profile.model_dump(mode="json")), row[0]),
+    )
+
+
+def seed_run_prerequisites(dsn: str, spec: RunSpec, *, profile_ready: bool = True) -> RunSpec:
+    """Insert approved configuration for `spec` and return it with resolved IDs.
+
+    `profile_ready=True` adds a validated synthetic COMPLETE FULL profile for the snapshot only when it has no
+    current profile job; use False (or a real worker-registered snapshot) when the gate itself is under test.
+    """
     with psycopg.connect(dsn) as conn, conn.transaction():
         set_tenant_context(conn, spec.tenant_id)
         with conn.cursor() as cur:
@@ -81,13 +154,33 @@ def seed_run_prerequisites(dsn: str, spec: RunSpec) -> RunSpec:
                 ),
             )
 
-            canonical_info = spec.snapshot.source_descriptor.get("canonical", {})
-            storage_loc = (
-                canonical_info.get("s3a_uri")
-                or spec.snapshot.source_descriptor.get("path")
-                or f"s3a://staging/{spec.snapshot.snapshot_id}"
-            )
-            source_kind = "OBJECT_FILE" if spec.snapshot.source_kind in (None, "LOCAL_FILE", "csv", "parquet", "CSV", "PARQUET") else spec.snapshot.source_kind
+            raw_descriptor = spec.snapshot.source_descriptor
+            if raw_descriptor.get("descriptor_version") == 2:
+                source_desc = raw_descriptor
+                storage_loc = f"s3a://{raw_descriptor['bucket']}/{raw_descriptor['key']}"
+            else:
+                canonical_info = raw_descriptor.get("canonical")
+                if not isinstance(canonical_info, dict) or canonical_info.get("format") != "PARQUET":
+                    canonical_info = {
+                        "bucket": "dq-snapshots-local",
+                        "key": f"snapshots/{spec.tenant_id}/{spec.snapshot.snapshot_id}/canonical.parquet",
+                        "version_id": "v1",
+                        "s3a_uri": f"s3a://dq-snapshots-local/snapshots/{spec.tenant_id}/{spec.snapshot.snapshot_id}/canonical.parquet",
+                        "content_sha256": raw_descriptor.get("content_sha256", "0" * 64),
+                        "size_bytes": 1024,
+                        "format": "PARQUET",
+                    }
+                source_desc = {
+                    **raw_descriptor,
+                    "canonical": canonical_info,
+                    "normalization_version": raw_descriptor.get("normalization_version", 1),
+                }
+                storage_loc = (
+                    canonical_info.get("s3a_uri")
+                    or raw_descriptor.get("path")
+                    or f"s3a://staging/{spec.snapshot.snapshot_id}"
+                )
+            source_kind = "OBJECT_FILE"
             cur.execute(
                 """
                 INSERT INTO dataset_snapshots (
@@ -103,7 +196,7 @@ def seed_run_prerequisites(dsn: str, spec: RunSpec) -> RunSpec:
                     spec.tenant_id,
                     spec.snapshot.asset_id,
                     source_kind,
-                    Jsonb(spec.snapshot.source_descriptor),
+                    Jsonb(source_desc),
                     spec.snapshot.source_descriptor.get("content_sha256", "a" * 64),
                     storage_loc,
                     Jsonb(spec.snapshot.schema_definition),
@@ -214,7 +307,10 @@ def seed_run_prerequisites(dsn: str, spec: RunSpec) -> RunSpec:
                     ),
                 )
 
-    new_snapshot = spec.snapshot.model_copy(update={"source_kind": "OBJECT_FILE"})
+        if profile_ready:
+            _seed_full_profile(conn, spec.tenant_id, spec.snapshot.snapshot_id)
+
+    new_snapshot = spec.snapshot.model_copy(update={"source_kind": "OBJECT_FILE", "source_descriptor": source_desc})
     return spec.model_copy(
         update={
             "ruleset_id": ruleset_id,

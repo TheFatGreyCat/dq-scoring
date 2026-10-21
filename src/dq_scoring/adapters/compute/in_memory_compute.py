@@ -3,8 +3,8 @@
 from uuid import UUID
 
 from dq_scoring.common.hash_utils import compute_deterministic_hash
+from dq_scoring.common.profiling import SnapshotProfile
 from dq_scoring.core.entities import (
-    CanonicalMetric,
     DatasetSnapshot,
     OutlierExecutionOutput,
     QualityRule,
@@ -21,7 +21,7 @@ class InMemoryComputeAdapter(IComputeEnginePort):
     def __init__(self) -> None:
         self._preset_rule_outputs: dict[UUID, RuleExecutionOutput] = {}
         self._preset_outliers: dict[str, OutlierExecutionOutput] = {}
-        self._preset_metrics: list[CanonicalMetric] = []
+        self._profiles: dict[UUID, SnapshotProfile] = {}
         self._registered_snapshots: dict[UUID, str] = {}
 
     def register_snapshot(self, snapshot: DatasetSnapshot) -> None:
@@ -51,20 +51,17 @@ class InMemoryComputeAdapter(IComputeEnginePort):
         """Register a canned outlier detection output for a specific column."""
         self._preset_outliers[column] = output
 
+    def set_profile(self, snapshot_id: UUID, result: SnapshotProfile) -> None:
+        self._profiles[snapshot_id] = SnapshotProfile.model_validate(result.model_dump())
+
     def profile_snapshot(
-        self, snapshot: DatasetSnapshot, columns: list[str]
-    ) -> list[CanonicalMetric]:
-        """Return preset or default profiling metrics."""
-        if self._preset_metrics:
-            return self._preset_metrics
-        return [
-            CanonicalMetric(
-                metric_name="row_count",
-                column_name=col,
-                metric_value=snapshot.total_rows,
-            )
-            for col in columns
-        ]
+        self, snapshot: DatasetSnapshot, *, profile_id: UUID, fingerprint: str,
+    ) -> SnapshotProfile:
+        self.verify_snapshot(snapshot)
+        result = self._profiles.get(snapshot.snapshot_id)
+        if result is None:
+            raise RunAbortedError("FULL_PROFILE_REQUIRED")
+        return result.model_copy(update={"profile_id": profile_id, "fingerprint": fingerprint})
 
     def execute_rules(
         self,

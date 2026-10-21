@@ -30,7 +30,7 @@ def _settings(**kw) -> LlmSettings:
 def _build(columns, protected=frozenset(), total=4, sample=4):
     schema = {"columns": [{"name": n} for n in columns]}
     profile = {"sample_rows": sample, "columns": [{"name": n, **s} for n, s in columns.items()]}
-    return build_recommendation_context(schema, profile, protected, total, 50), profile
+    return build_recommendation_context(schema, profile, protected, total, 50, {n: "CATEGORY" for n in columns}), profile
 
 
 def test_payload_contains_only_tokens_and_aggregates():
@@ -40,7 +40,8 @@ def test_payload_contains_only_tokens_and_aggregates():
     for leaked in ("customer_email", "fare", "SECRET-MIN", "SECRET-MAX"):
         assert leaked not in payload
     assert set(json.loads(payload)["columns"][0]) == {
-        "token", "type", "sample_rows", "null_count", "non_null_count", "distinct_count", "parse_success_count"}
+        "token", "type", "sample_rows", "null_count", "non_null_count", "distinct_count", "parse_success_count",
+        "semantic"}
 
 
 @pytest.mark.parametrize("patch", [
@@ -201,3 +202,14 @@ def test_concurrency_bound_fails_fast():
 
     gateway_client._SEMAPHORES.clear()
     asyncio.run(run())
+
+
+def test_full_profile_context_keeps_unknown_metrics_null_and_uses_scanned_rows():
+    stat = {"technical_type": "STRING", "null_count": 1, "non_null_count": 9, "distinct_count": None,
+            "parse_success_count": None, "parse_target": None}
+    schema = {"columns": [{"name": "a"}]}
+    profile = {"mode": "FULL", "is_sample": False, "scanned_rows": 10, "columns": [{"name": "a", **stat}]}
+    context, tokens = build_recommendation_context(schema, profile, frozenset(), 10, 50, {"a": "CATEGORY"})
+    column = json.loads(canonical_json(context))["columns"][0]
+    assert column["sample_rows"] == 10 and column["distinct_count"] is None and column["parse_success_count"] is None
+    assert tokens == {"c000": "a"}

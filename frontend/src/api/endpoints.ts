@@ -21,6 +21,8 @@ import type {
   ScoringPolicyTemplate,
   Page, ImportSession, StorageObject, DatasetPreview, Recommendations,
   AiStatus, AiRecommendationRequest, AiRecommendations, AssessmentNarrative,
+  ProfileMode, SnapshotProfile, FullProfileSubmission,
+  SemanticView, SemanticConfirmRequest, SemanticConfirmResult, SemanticInference, SemanticProvider,
   TemplateOverview, FindingCategory, FindingResponse, SensitiveFindingsResponse, ProtectionPolicyResponse,
   ColumnClassificationsResponse, UpdateClassificationsRequest,
   PrivacyRule, PrivacyRuleCreateRequest, PrivacyRuleUpdateRequest, PrivacyRuleWriteResponse,
@@ -107,6 +109,17 @@ export const abortImport = (value: UUID) => api<ImportSession>("POST", `/imports
 export const storageObjects = (filters: Filters = {}, signal?: AbortSignal) => api<{items: StorageObject[]; next_token: string | null}>("GET", `/storage/objects${query(filters)}`, { signal });
 export const getPreview = (value: UUID) => api<DatasetPreview>("GET", `/snapshots/${id(value)}/preview`);
 export const getRecommendations = (value: UUID, filters: Filters = {}) => api<Recommendations>("GET", `/snapshots/${id(value)}/recommendations${query(filters)}`);
+export const getSnapshotProfile = (value: UUID, mode: ProfileMode, signal?: AbortSignal) =>
+  api<SnapshotProfile>("GET", `/snapshots/${id(value)}/profile${query({ mode })}`, { signal });
+export const submitFullProfile = (value: UUID) => api<FullProfileSubmission>("POST", `/snapshots/${id(value)}/profiles/full`);
+export const getSemantics = (value: UUID, profileMode: ProfileMode, signal?: AbortSignal) =>
+  api<SemanticView>("GET", `/snapshots/${id(value)}/semantics${query({ profile_mode: profileMode })}`, { signal });
+export const confirmSemantics = (value: UUID, body: SemanticConfirmRequest) =>
+  api<SemanticConfirmResult>("PUT", `/snapshots/${id(value)}/semantics`, { body });
+export const inferSemantics = (value: UUID, provider: SemanticProvider, profileMode: ProfileMode, signal?: AbortSignal) =>
+  api<SemanticInference>("POST", `/snapshots/${id(value)}/semantics/infer`, {
+    body: { provider, profile_mode: profileMode }, signal, timeoutMs: 130_000,
+  });
 export const getAiStatus = (signal?: AbortSignal) => api<AiStatus>("GET", "/ai/status", { signal });
 export const createAiRecommendations = (value: UUID, body: AiRecommendationRequest, signal?: AbortSignal) =>
   api<AiRecommendations>("POST", `/snapshots/${id(value)}/recommendations/ai`, { body, signal, timeoutMs: 130_000 });

@@ -3,7 +3,15 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from dq_scoring.core.entities import LeasedRun, RunSpec, RunStatus
+from dq_scoring.common.evaluation_identity import request_identity_matches
+from dq_scoring.common.hash_utils import compute_deterministic_hash
+from dq_scoring.common.profiling import (
+    PROFILER_VERSION,
+    ProfileRequiredError,
+    SnapshotProfile,
+)
+from dq_scoring.core.entities import DatasetSnapshot, LeasedRun, RunSpec, RunStatus
+from dq_scoring.core.exceptions import IdempotencyConflictError
 from dq_scoring.ports.queue_port import IQueuePort
 
 
@@ -13,20 +21,40 @@ class InMemoryQueueAdapter(IQueuePort):
     def __init__(self) -> None:
         self._runs: dict[UUID, RunSpec] = {}
         self._statuses: dict[UUID, RunStatus] = {}
-        self._idempotency_map: dict[str, UUID] = {}
+        self._idempotency_map: dict[tuple[UUID, str], UUID] = {}
         self._lease_generations: dict[UUID, int] = {}
         self._queue: list[UUID] = []
         self._active_leases: dict[UUID, LeasedRun] = {}
+        self._profile_readiness: dict[tuple[UUID, UUID], SnapshotProfile] = {}
+        self._profile_snapshots: dict[tuple[UUID, UUID], str] = {}
+
+    def set_profile_ready(self, snapshot: DatasetSnapshot, result: SnapshotProfile) -> None:
+        result = SnapshotProfile.model_validate(result.model_dump())
+        if result.mode != "FULL" or result.profiler_version != PROFILER_VERSION:
+            raise ValueError("FULL_PROFILE_REQUIRED")
+        key = (snapshot.tenant_id,snapshot.snapshot_id)
+        self._profile_readiness[key] = result
+        self._profile_snapshots[key] = compute_deterministic_hash(snapshot.model_dump(mode="json"))
 
     def enqueue_run(self, spec: RunSpec, idempotency_key: str) -> UUID:
         """Enqueue run idempotently, returning existing run_id if previously seen."""
-        if idempotency_key in self._idempotency_map:
-            return self._idempotency_map[idempotency_key]
+        key = (spec.tenant_id, idempotency_key)
+        if key in self._idempotency_map:
+            existing_id = self._idempotency_map[key]
+            saved = self._runs[existing_id]
+            if saved.created_by != spec.created_by or not request_identity_matches(saved.model_dump(mode="json"), spec):
+                raise IdempotencyConflictError()
+            return existing_id
+        profile = self._profile_readiness.get((spec.tenant_id, spec.snapshot.snapshot_id))
+        if (profile is None or profile.total_rows != spec.snapshot.total_rows or spec.snapshot.tenant_id != spec.tenant_id
+            or self._profile_snapshots.get((spec.tenant_id,spec.snapshot.snapshot_id)) != compute_deterministic_hash(spec.snapshot.model_dump(mode="json"))):
+            raise ProfileRequiredError(None)
+        spec = spec.model_copy(update={"profile_id": profile.profile_id, "profile_fingerprint": profile.fingerprint})
 
         self._runs[spec.run_id] = spec
         self._statuses[spec.run_id] = RunStatus.QUEUED
         self._lease_generations[spec.run_id] = 0
-        self._idempotency_map[idempotency_key] = spec.run_id
+        self._idempotency_map[key] = spec.run_id
         self._queue.append(spec.run_id)
         return spec.run_id
 

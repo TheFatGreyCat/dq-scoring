@@ -10,6 +10,7 @@ from dq_scoring.adapters.db.in_memory_assessment_store import (
     InMemoryAssessmentStore,
 )
 from dq_scoring.adapters.queue.in_memory_queue import InMemoryQueueAdapter
+from dq_scoring.common.profiling import ProfileRequiredError
 from dq_scoring.core.entities import (
     DatasetSnapshot,
     ImmutableAssessment,
@@ -25,6 +26,7 @@ from dq_scoring.core.models import (
     RuleCounts,
     ScoringPolicy,
 )
+from tests.support.run_seed import synthetic_full_profile
 
 
 def _sample_snapshot() -> DatasetSnapshot:
@@ -86,13 +88,12 @@ def test_in_memory_compute_adapter():
     # Outliers and profiling
     outlier = adapter.detect_outliers(snapshot, "c1")
     assert outlier.total_evaluated == 50
-    metrics = adapter.profile_snapshot(snapshot, ["c1"])
-    assert len(metrics) == 1
-    assert metrics[0].metric_value == 50
 
     # Immutability registration and verification contract
     adapter.register_snapshot(snapshot)
     adapter.verify_snapshot(snapshot)
+    with pytest.raises(RunAbortedError, match="FULL_PROFILE_REQUIRED"):
+        adapter.profile_snapshot(snapshot, profile_id=uuid4(), fingerprint="a" * 64)
     adapter.release_snapshot(snapshot)
     with pytest.raises(RunAbortedError):
         adapter.verify_snapshot(snapshot)
@@ -128,13 +129,17 @@ def test_in_memory_assessment_store():
 
 def test_in_memory_queue_adapter():
     queue = InMemoryQueueAdapter()
+    snapshot = _sample_snapshot()
     spec = RunSpec(
         run_id=uuid4(),
-        tenant_id=uuid4(),
-        snapshot=_sample_snapshot(),
+        tenant_id=snapshot.tenant_id,
+        snapshot=snapshot,
         rules=[],
         policy=ScoringPolicy(),
+        ruleset_id=uuid4(), policy_id=uuid4(), created_by=uuid4(),
     )
+
+    queue.set_profile_ready(spec.snapshot, synthetic_full_profile(spec.snapshot))
 
     # Idempotent enqueue
     rid1 = queue.enqueue_run(spec, idempotency_key="key-1")
@@ -160,9 +165,70 @@ def test_in_memory_queue_adapter():
 
 def test_expired_in_memory_lease_cannot_publish_observation():
     queue = InMemoryQueueAdapter()
-    spec = RunSpec(run_id=uuid4(), tenant_id=uuid4(), snapshot=_sample_snapshot(), rules=[], policy=ScoringPolicy())
+    snapshot = _sample_snapshot()
+    spec = RunSpec(run_id=uuid4(), tenant_id=snapshot.tenant_id, snapshot=snapshot, rules=[], policy=ScoringPolicy())
+    queue.set_profile_ready(spec.snapshot, synthetic_full_profile(spec.snapshot))
     queue.enqueue_run(spec, idempotency_key="expired-observation")
     lease = queue.claim_next_run(worker_id="synthetic", timeout_seconds=-1)
     assert lease is not None
     assert queue.heartbeat(lease.run_id, lease.lease_generation) is False
     assert queue.record_spark_observation(lease.run_id, lease.lease_generation, spec.tenant_id, {"jobs": []}) is False
+
+def test_in_memory_queue_rejects_altered_snapshot_identity():
+    queue = InMemoryQueueAdapter()
+    snapshot = _sample_snapshot()
+    spec = RunSpec(run_id=uuid4(), tenant_id=snapshot.tenant_id, snapshot=snapshot, rules=[], policy=ScoringPolicy(),
+                   ruleset_id=uuid4(), policy_id=uuid4(), created_by=uuid4())
+    queue.set_profile_ready(snapshot, synthetic_full_profile(snapshot))
+
+    # Successful initial enqueue
+    key = f"key-{uuid4()}"
+    enqueued_id = queue.enqueue_run(spec, idempotency_key=key)
+    assert enqueued_id == spec.run_id
+
+    # Altered schema with same total_rows rejected on fresh key
+    alt_schema = spec.model_copy(
+        update={
+            "run_id": uuid4(),
+            "snapshot": snapshot.model_copy(update={"schema_definition": {"columns": ["different_column"]}}),
+        }
+    )
+    with pytest.raises(ProfileRequiredError):
+        queue.enqueue_run(alt_schema, idempotency_key=f"alt-schema-{uuid4()}")
+
+    # Altered canonical object version rejected on fresh key
+    alt_canonical = spec.model_copy(
+        update={
+            "run_id": uuid4(),
+            "snapshot": snapshot.model_copy(
+                update={
+                    "source_descriptor": {
+                        **snapshot.source_descriptor,
+                        "canonical": {**snapshot.source_descriptor["canonical"], "version_id": "v2"},
+                    }
+                }
+            ),
+        }
+    )
+    with pytest.raises(ProfileRequiredError):
+        queue.enqueue_run(alt_canonical, idempotency_key=f"alt-canonical-{uuid4()}")
+
+    # Tenant mismatch between spec and snapshot rejected
+    mismatched_tenant = spec.model_copy(update={"run_id": uuid4(), "tenant_id": uuid4()})
+    with pytest.raises(ProfileRequiredError):
+        queue.enqueue_run(mismatched_tenant, idempotency_key=f"mismatched-tenant-{uuid4()}")
+
+    # Existing idempotency replay succeeds even with altered snapshot
+    assert queue.enqueue_run(alt_schema, idempotency_key=key) == enqueued_id
+
+
+def test_in_memory_idempotency_key_is_scoped_to_tenant():
+    queue = InMemoryQueueAdapter()
+    runs = []
+    for _ in range(2):
+        snapshot = _sample_snapshot()
+        spec = RunSpec(run_id=uuid4(), tenant_id=snapshot.tenant_id, snapshot=snapshot,
+                       rules=[], policy=ScoringPolicy(), created_by=uuid4(), ruleset_id=uuid4(), policy_id=uuid4())
+        queue.set_profile_ready(snapshot, synthetic_full_profile(snapshot))
+        runs.append(queue.enqueue_run(spec, idempotency_key='same-client-key'))
+    assert runs[0] != runs[1]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -39,6 +40,9 @@ class S3ObjectStoreAdapter(IObjectStorePort):
                 "config": Config(
                     signature_version="s3v4",
                     s3={"addressing_style": "path"},
+                    connect_timeout=5,
+                    read_timeout=30,
+                    retries={'total_max_attempts': 3},
                 ),
             }
             if self._settings.ca_bundle:
@@ -72,26 +76,50 @@ class S3ObjectStoreAdapter(IObjectStorePort):
             )
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
-            if code in ("404", "NoSuchKey"):
+            if code in ("404", "NoSuchKey", "NoSuchVersion"):
                 raise FileNotFoundError(f"Object s3://{ref.bucket}/{ref.key} not found") from exc
             if code in ("403", "AccessDenied"):
                 raise PermissionError(f"Access denied to s3://{ref.bucket}/{ref.key}") from exc
             raise
 
-    def open_stream(self, ref: ObjectRef) -> BinaryIO:
+    def open_stream(self, ref: ObjectRef, *, if_match_etag: str | None = None) -> BinaryIO:
         try:
             extra_args: dict[str, Any] = {}
             if ref.version_id:
                 extra_args["VersionId"] = ref.version_id
+            if if_match_etag:
+                extra_args["IfMatch"] = f'"{self._clean_etag(if_match_etag)}"'
             resp = self._client.get_object(Bucket=ref.bucket, Key=ref.key, **extra_args)
             return resp["Body"]
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
-            if code in ("404", "NoSuchKey"):
+            if code in ("404", "NoSuchKey", "NoSuchVersion"):
                 raise FileNotFoundError(f"Object s3://{ref.bucket}/{ref.key} not found") from exc
             if code in ("403", "AccessDenied"):
                 raise PermissionError(f"Access denied to s3://{ref.bucket}/{ref.key}") from exc
+            if code in ("412", "PreconditionFailed"):
+                raise ObjectChangedError(f"Object s3://{ref.bucket}/{ref.key} changed") from exc
             raise
+
+    def open_range(self, ref: ObjectRef, offset: int, length: int) -> BinaryIO:
+        if offset < 0 or length <= 0 or not ref.version_id or ref.version_id == 'null':
+            raise ValueError('Pinned version, nonnegative offset and positive length required')
+        try:
+            response = self._client.get_object(Bucket=ref.bucket, Key=ref.key,
+                VersionId=ref.version_id, Range=f'bytes={offset}-{offset + length - 1}')
+        except ClientError as exc:
+            code = exc.response.get('Error', {}).get('Code', '')
+            if code in ('404', 'NoSuchKey', 'NoSuchVersion'):
+                raise FileNotFoundError('Pinned object version is missing') from exc
+            if code in ('403', 'AccessDenied'):
+                raise PermissionError('Pinned object version is inaccessible') from exc
+            raise
+        body = response['Body']
+        expected = f'bytes {offset}-{offset + length - 1}/'
+        if response.get('VersionId') != ref.version_id or response.get('ContentLength') != length or not response.get('ContentRange', '').startswith(expected):
+            body.close()
+            raise ObjectChangedError('Pinned range metadata mismatch')
+        return body
 
     def list_objects(
         self,
@@ -300,4 +328,40 @@ class S3ObjectStoreAdapter(IObjectStorePort):
             code = exc.response.get("Error", {}).get("Code", "")
             if code in ("403", "AccessDenied"):
                 raise PermissionError(f"Access denied writing s3://{bucket}/{key}") from exc
+            raise
+
+    def list_versions(self, bucket: str, prefix: str) -> Iterator[ObjectMetadata]:
+        try:
+            for page in self._client.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
+                for item in page.get("Versions", []):
+                    version = item.get("VersionId")
+                    ref = ObjectRef(bucket=bucket, key=item["Key"], version_id=None if version in (None, "", "null") else version)
+                    yield ObjectMetadata(
+                        ref=ref,
+                        size_bytes=int(item.get("Size", 0)),
+                        etag=self._clean_etag(item.get("ETag")),
+                        version_id=ref.version_id,
+                        last_modified=item.get("LastModified"),
+                    )
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("404", "NoSuchBucket"):
+                raise FileNotFoundError(f"Bucket {bucket} not found") from exc
+            if code in ("403", "AccessDenied"):
+                raise PermissionError(f"Access denied listing versions in bucket {bucket}") from exc
+            raise
+
+    def delete_version(self, ref: ObjectRef) -> None:
+        if not ref.version_id or ref.version_id == "null":
+            raise ValueError("An exact non-null version id is required")
+        try:
+            self._client.delete_object(Bucket=ref.bucket, Key=ref.key, VersionId=ref.version_id)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("404", "NoSuchKey", "NoSuchVersion"):
+                raise FileNotFoundError("Object version not found") from exc
+            if code in ("403", "AccessDenied", "ObjectLocked") or (
+                code == "InvalidRequest" and "WORM protected" in exc.response.get("Error", {}).get("Message", "")
+            ):
+                raise PermissionError("Object version delete denied or locked") from exc
             raise

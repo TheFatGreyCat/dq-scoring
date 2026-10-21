@@ -10,9 +10,13 @@ from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
 from dq_scoring.adapters.db.policy_mapping import scoring_policy_from_row
+from dq_scoring.common.evaluation_identity import saved_run_matches
+from dq_scoring.common.profiling import ProfileRequiredError
 from dq_scoring.core.entities import DatasetSnapshot, QualityRule, RunSpec
+from dq_scoring.core.exceptions import IdempotencyConflictError
 from dq_scoring.ports.queue_port import IQueuePort
 from dq_scoring.presentation.api.auth import AuthenticatedUser
 from dq_scoring.presentation.api.dependencies import (
@@ -21,6 +25,7 @@ from dq_scoring.presentation.api.dependencies import (
     get_db_connection,
     get_queue_port,
 )
+from dq_scoring.presentation.api.errors import create_problem_response
 from dq_scoring.presentation.api.pagination import (
     Page,
     Pagination,
@@ -34,6 +39,7 @@ from dq_scoring.presentation.api.schemas.run_schemas import (
     RunStatusResponse,
     TriggerRunRequest,
 )
+from dq_scoring.services.evaluation_reuse import find_reusable_run
 
 router = APIRouter(prefix="/api/v1/runs", tags=["Evaluation Runs"])
 
@@ -65,6 +71,24 @@ def _decode_cursor(cursor: str, run_id: UUID) -> tuple[datetime, UUID]:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="INVALID_CURSOR") from exc
 
 
+def _idempotency_conflict() -> JSONResponse:
+    code = IdempotencyConflictError.code
+    return create_problem_response(409, "Conflict", code, extensions={"code": code})
+
+
+def _reused_response(conn: psycopg.Connection, user: AuthenticatedUser, run_id: UUID) -> JSONResponse:
+    row = conn.execute(
+        "SELECT r.run_id,r.tenant_id,r.snapshot_id,r.ruleset_id,r.policy_id,r.created_at,r.completed_at,a.assessment_id "
+        "FROM evaluation_runs r JOIN assessments a ON a.tenant_id=r.tenant_id AND a.run_id=r.run_id "
+        "WHERE r.tenant_id=%s AND r.run_id=%s",
+        (user.tenant_id, run_id),
+    ).fetchone()
+    body = RunResponse(run_id=row[0], tenant_id=row[1], snapshot_id=row[2], ruleset_id=row[3], policy_id=row[4],
+                       status="SUCCEEDED", created_at=row[5], completed_at=row[6], assessment_id=row[7],
+                       created_by=user.user_id, owned_by_me=True)
+    return JSONResponse(body.model_dump(mode="json"), status_code=status.HTTP_200_OK)
+
+
 @router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
 def trigger_run(
     req: TriggerRunRequest,
@@ -73,6 +97,23 @@ def trigger_run(
     queue: IQueuePort = Depends(get_queue_port),
 ) -> RunResponse:
     """Trigger an asynchronous DQ evaluation run."""
+    if req.idempotency_key:
+        existing = conn.execute(
+            "SELECT run_id,tenant_id,snapshot_id,ruleset_id,policy_id,run_status,created_at,created_by,"
+            "execution_profile,outlier_config FROM evaluation_runs WHERE tenant_id=%s AND idempotency_key=%s",
+            (current_user.tenant_id,req.idempotency_key),
+        ).fetchone()
+        if existing:
+            if existing[7] != current_user.user_id or not saved_run_matches(
+                snapshot_id=existing[2], ruleset_id=existing[3], policy_id=existing[4],
+                execution_profile=existing[8], outlier_config=existing[9],
+                requested={"snapshot_id": req.snapshot_id, "ruleset_id": req.ruleset_id, "policy_id": req.policy_id,
+                           "execution_profile": req.execution_profile, "outlier_columns": req.outlier_columns},
+            ):
+                return _idempotency_conflict()
+            return RunResponse(run_id=existing[0],tenant_id=existing[1],snapshot_id=existing[2],
+                ruleset_id=existing[3],policy_id=existing[4],status=existing[5],created_at=existing[6],
+                owned_by_me=True)
     with conn.cursor() as cur:
         # 1. Fetch Snapshot
         cur.execute(
@@ -191,7 +232,28 @@ def trigger_run(
         )
 
         idem_key = req.idempotency_key or f"run-{run_id}"
-        actual_run_id = queue.enqueue_run(spec, idempotency_key=idem_key)
+        try:
+            if req.reuse_completed and not req.idempotency_key:
+                reusable = find_reusable_run(conn, spec)
+                if reusable is not None:
+                    return _reused_response(conn, current_user, reusable)
+            actual_run_id = queue.enqueue_run(spec, idempotency_key=idem_key)
+        except ProfileRequiredError as error:
+            return create_problem_response(409,"Conflict",error.code,extensions={"code":error.code,"profile":error.job})
+        except IdempotencyConflictError:
+            return _idempotency_conflict()
+
+        if actual_run_id != run_id:
+            winner = conn.execute(
+                "SELECT run_id,tenant_id,snapshot_id,ruleset_id,policy_id,run_status,created_at,completed_at,created_by "
+                "FROM evaluation_runs WHERE tenant_id=%s AND run_id=%s AND created_by=%s",
+                (current_user.tenant_id, actual_run_id, current_user.user_id),
+            ).fetchone()
+            if winner is None:
+                return _idempotency_conflict()
+            return RunResponse(run_id=winner[0], tenant_id=winner[1], snapshot_id=winner[2],
+                ruleset_id=winner[3], policy_id=winner[4], status=winner[5], created_at=winner[6],
+                completed_at=winner[7], created_by=winner[8], owned_by_me=True)
 
         return RunResponse(
             run_id=actual_run_id,

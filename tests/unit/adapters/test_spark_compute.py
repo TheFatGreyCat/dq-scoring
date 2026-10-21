@@ -28,14 +28,11 @@ def golden_snapshot(spark_adapter: PySparkComputeAdapter) -> DatasetSnapshot:
     return create_test_snapshot(root / "tests/fixtures/chicago_taxi/chicago_taxi_golden_5k.csv")
 
 def test_profile_snapshot(spark_adapter: PySparkComputeAdapter, golden_snapshot: DatasetSnapshot):
-    """Verify single-pass snapshot profiling on selected columns."""
-    metrics = spark_adapter.profile_snapshot(golden_snapshot, ["trip_id", "fare"])
-    assert len(metrics) == 6
-    metric_map = {(m.column_name, m.metric_name): m.metric_value for m in metrics}
-    assert metric_map[("trip_id", "row_count")] == 5000
-    assert metric_map[("trip_id", "null_count")] == 50
-    assert metric_map[("fare", "row_count")] == 5000
-    assert metric_map[("fare", "null_count")] == 100
+    profile = spark_adapter.profile_snapshot(golden_snapshot, profile_id=uuid4(), fingerprint="a" * 64)
+    columns = {c.name: c for c in profile.columns}
+    assert profile.total_rows == profile.scanned_rows == 5000
+    assert columns["trip_id"].null_count == 50
+    assert columns["fare"].null_count == 100
 
 
 def test_zero_denominator_empty_snapshot(spark_adapter: PySparkComputeAdapter):

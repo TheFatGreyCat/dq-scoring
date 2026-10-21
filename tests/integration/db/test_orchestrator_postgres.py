@@ -37,7 +37,7 @@ from tests.support.run_seed import seed_run_prerequisites
 class FailingComputeAdapter(InMemoryComputeAdapter):
     """Compute engine adapter that raises technical execution errors."""
 
-    def profile_snapshot(self, snapshot: DatasetSnapshot, columns: list[str]):
+    def profile_snapshot(self, snapshot: DatasetSnapshot, *, profile_id, fingerprint):
         raise RuntimeError("Compute infrastructure connection timeout")
 
     def execute_rules(

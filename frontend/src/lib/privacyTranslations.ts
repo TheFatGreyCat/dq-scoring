@@ -71,6 +71,11 @@ export const privacyTranslations = {
     "privacy.profiling.raw_size": "Kích thước gốc",
     "privacy.profiling.canonical_size": "Kích thước chuẩn hóa",
     "privacy.profiling.normalization_version": "Phiên bản chuẩn hóa",
+    "privacy.profiling.storage_mode": "Cách lưu snapshot",
+    "privacy.profiling.storage_owned": "Một bản gốc bất biến",
+    "privacy.profiling.storage_reference": "Tham chiếu phiên bản nguồn",
+    "privacy.profiling.storage_legacy": "Bản gốc và bản chuẩn hóa (cũ)",
+    "privacy.profiling.object_version": "Phiên bản object",
     "privacy.profiling.dimensions": "Số chiều",
 
     // Classification tab
@@ -281,6 +286,11 @@ export const privacyTranslations = {
     "privacy.profiling.raw_size": "Raw Size",
     "privacy.profiling.canonical_size": "Canonical Size",
     "privacy.profiling.normalization_version": "Normalization Version",
+    "privacy.profiling.storage_mode": "Snapshot storage",
+    "privacy.profiling.storage_owned": "One immutable raw copy",
+    "privacy.profiling.storage_reference": "Pinned source reference",
+    "privacy.profiling.storage_legacy": "Raw and normalized copies (legacy)",
+    "privacy.profiling.object_version": "Object version",
     "privacy.profiling.dimensions": "Dimensions",
 
     // Classification tab

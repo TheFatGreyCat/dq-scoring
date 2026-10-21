@@ -49,6 +49,7 @@ spec:
             - name: DQ_S3_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef: {name: {{ .Values.minio.existingSecret }}, key: {{ .Values.minio.secretAccessKeyKey }}}
+            {{- include "dq-scoring.sourceStore.env" . | nindent 12 }}
             - name: DQ_IMPORT_TEMP_ROOT
               value: {{ if .Values.security.protectedProcessing.enabled }}"/opt/dq/scratch"{{ else }}"/scratch/imports"{{ end }}
           resources:
@@ -60,6 +61,7 @@ spec:
             {{- else }}
             - {name: scratch, mountPath: /scratch}
             {{- end }}
+            {{- include "dq-scoring.sourceStore.volumeMount" . | nindent 12 }}
       volumes:
         {{- if .Values.security.protectedProcessing.enabled }}
         - name: scratch
@@ -71,4 +73,5 @@ spec:
         - name: scratch
           emptyDir: {sizeLimit: 45Gi}
         {{- end }}
+        {{- include "dq-scoring.sourceStore.volume" . | nindent 8 }}
 {{- end }}

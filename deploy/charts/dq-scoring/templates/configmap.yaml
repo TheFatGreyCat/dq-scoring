@@ -18,6 +18,21 @@ data:
   DQ_S3_BUCKET_STAGING: {{ .Values.minio.buckets.staging | quote }}
   DQ_S3_BUCKET_SNAPSHOTS: {{ .Values.minio.buckets.snapshots | quote }}
   DQ_S3_BUCKET_ARTIFACTS: {{ .Values.minio.buckets.artifacts | quote }}
+  DQ_SOURCE_S3_ENABLED: {{ .Values.sourceStore.enabled | quote }}
+{{- if .Values.sourceStore.enabled }}
+  DQ_SOURCE_S3_ENDPOINT_URL: {{ .Values.sourceStore.endpoint | quote }}
+  DQ_SOURCE_S3_REGION: {{ .Values.sourceStore.region | quote }}
+  DQ_SOURCE_S3_USE_SSL: {{ .Values.sourceStore.useSsl | quote }}
+  DQ_SOURCE_S3_BUCKET: {{ .Values.sourceStore.bucket | quote }}
+  DQ_SOURCE_S3_TENANT_PREFIXES: {{ .Values.sourceStore.tenantPrefixes | toJson | quote }}
+  DQ_SOURCE_S3_RETENTION_GUARANTEED: {{ .Values.sourceStore.retentionGuaranteed | quote }}
+  DQ_SOURCE_S3_EXECUTOR_SECRET: {{ .Values.sourceStore.existingSecret | quote }}
+{{- if .Values.sourceStore.caSecret }}
+  DQ_SOURCE_S3_CA_BUNDLE: {{ printf "/opt/dq/source-ca/%s" .Values.sourceStore.caKey | quote }}
+  DQ_SOURCE_S3_CA_SECRET: {{ .Values.sourceStore.caSecret | quote }}
+{{- end }}
+{{- end }}
+  DQ_SPARK_OBJECT_STORE_SECRET: {{ .Values.minio.existingSecret | quote }}
   DQ_AUTH_ALGORITHM: {{ .Values.security.jwtAlgorithm | quote }}
   DQ_AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: {{ .Values.security.accessTokenExpireMinutes | quote }}
   DQ_AUTH_REFRESH_TOKEN_EXPIRE_DAYS: {{ .Values.security.refreshTokenExpireDays | quote }}

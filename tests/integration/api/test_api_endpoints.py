@@ -123,7 +123,7 @@ def test_complete_api_lifecycle(client: TestClient, db_conn, pg_dsn: str):
 
     # 6. Create Snapshot
     from tests.support.object_snapshots import register_snapshot_via_api
-    snap = register_snapshot_via_api(client, creator_headers, content_or_path=b"trip_id,fare\nt1,12\n", asset_id=asset_id)
+    snap = register_snapshot_via_api(client, creator_headers, content_or_path=b"trip_id,fare\nt1,12\n", asset_id=asset_id, process_full_profile=True)
     snapshot_id = snap["snapshot_id"]
 
     # 7. Create Ruleset

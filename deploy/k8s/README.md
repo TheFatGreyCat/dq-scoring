@@ -181,3 +181,13 @@ revision using the procedure above. A successful Helm render proves configuratio
 quality, egress certification or runtime/model feasibility. Local inference requires a separately pinned
 runtime image/model artifact, license and measured synthetic benchmark; none is implicitly provisioned by
 this chart. Keep API advisory OFF when the model/gateway prerequisite is unavailable.
+
+### Snapshot profiling and semantic suggestions (migrations 022, 023)
+
+- Apply migrations 022 and 023 before serving the new API image. FULL profile jobs run in the fast-lane worker (same SparkSession as evaluations); KEDA fast counts queued FULL jobs and expired leases when enabled. New evaluations require a COMPLETE current FULL profile (409 `FULL_PROFILE_REQUIRED` otherwise); historical runs and existing idempotency keys are unaffected.
+
+Databases that applied the pre-release migration 023: run `uv run python -m dq_scoring.presentation.cli.repair_semantic_schema` (dry-run) with `DQ_ADMIN_POSTGRES_DSN` set; `--apply` rebuilds the semantic schema only if all three semantic tables are empty, otherwise aborts with `SEMANTIC_EVIDENCE_NOT_EMPTY` and requires manual review.
+
+- `llmLocal.*` mirrors `llm.*` for the optional LOCAL semantic provider (`DQ_LLM_LOCAL_*`), default OFF, HTTPS only. `llm.caSecret`/`llmLocal.caSecret` mount a private CA (key `caKey`, default `ca.crt`) read-only into the API pod only. LOCAL is not implicitly trusted: endpoint, model, Secret and egress need operator approval. Both providers are rejected under protected processing until an egress policy is approved.
+- The API provider receives only confirmed semantic labels, opaque tokens and allowlisted counts; LOCAL receives column names plus aggregates, never values.
+- Isolated smoke (2026-10-20, namespace created and deleted by the test, staging untouched): API/UI/Spark images built from commit cf088af plus uncommitted working tree (tag `cf088af-wip1519`); synthetic Postgres/MinIO; upload to registration to FULL COMPLETE (2000 rows, exact counts) to governance to evaluation run SUCCEEDED with the FULL profile pinned in the run spec; killing the worker pod mid-profile on a 600-column snapshot was followed by lease reclaim and COMPLETE (generation 2, attempt 2). The 300 s lease was expired by the test to shorten the drill. Not proven: the Spark driver ran in client mode on the worker pod and executors ran as pods in the namespace, but KEDA, ingress, network policies, protected processing, and any real LOCAL/API model were not exercised.
