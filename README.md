@@ -289,11 +289,12 @@ dq-scoring/
 | [Local Runbook](docs/LOCAL_RUNBOOK.md) | Khởi động Docker, migration, API, daemon, worker và UI |
 | [User Guide](docs/engineering/USER_GUIDE.md) | Hướng dẫn sử dụng hệ thống |
 | [DQ Scoring Theory](docs/theory/DQ_SCORING_THEORY.md) | Công thức, coverage, confidence và bất biến |
+| [Tổng quan kiến trúc](docs/design/ARCHITECTURE_OVERVIEW.md) | Bản đồ thành phần, luồng dữ liệu và ranh giới triển khai hiện tại |
 | [Yêu cầu phần mềm](docs/design/Chapter_2.md) | Phạm vi và yêu cầu chức năng |
-| [Thiết kế kiến trúc](docs/design/Chapter_4.md) · [Thiết kế dữ liệu](docs/design/Chapter_5.md) | Kiến trúc và mô hình lưu trữ |
-| [Infrastructure Design](docs/architecture/INFRASTRUCTURE_DESIGN.md) | Thiết kế hạ tầng |
+| [Thiết kế kiến trúc](docs/design/Chapter_4.md) · [Thiết kế dữ liệu](docs/design/Chapter_5.md) | Đặc tả chi tiết; đối chiếu mã nguồn để phân biệt thiết kế đích với phần đã triển khai |
+| [Infrastructure Design](docs/architecture/INFRASTRUCTURE_DESIGN.md) | Đặc tả hạ tầng và lưu trữ đối tượng |
 | [Kubernetes README](deploy/k8s/README.md) | Hướng dẫn triển khai trên cụm |
 | [Implementation & Reuse Guide](docs/engineering/IMPLEMENTATION_REUSE_GUIDE.md) | Quy ước triển khai và tái sử dụng |
-| [Branch Workflow](docs/engineering/BRANCH_WORKFLOW.md) · [Commit Guide](commit_guide.md) | Quy trình đóng góp mã nguồn |
+| [Branch Workflow](docs/engineering/BRANCH_WORKFLOW.md) | Quy trình nhánh và đóng góp mã nguồn |
 
 Các tài liệu đặc tả và báo cáo có thể phản ánh mốc triển khai trước đây. Với lệnh vận hành cục bộ, ưu tiên runbook hiện tại; với hợp đồng kỹ thuật, đối chiếu mã nguồn và kiểm thử tương ứng.
